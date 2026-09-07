@@ -1,4 +1,5 @@
 import { OpenAI } from 'openai'
+import { reportUsage, type LLMUsageSink } from './llm-usage.js'
 
 export interface LLMMessage {
   role: 'user' | 'assistant'
@@ -9,6 +10,7 @@ export interface LLMOptions {
   systemPrompt?: string
   maxTokens?: number
   temperature?: number
+  onUsage?: LLMUsageSink
 }
 
 export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Promise<string> {
@@ -30,6 +32,8 @@ export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Pro
       ? [{ role: 'system', content: options.systemPrompt }, ...messages]
       : messages,
   })
+
+  reportUsage(model, response.usage, options?.onUsage)
 
   return response.choices[0].message.content ?? ''
 }
