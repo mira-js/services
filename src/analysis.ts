@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import type { CollectedItem, ExtractionResult, PainPointTheme, Result } from '@mira/shared-core'
 import { BatchError } from '@mira/shared-core'
 import { callLLM } from './llm.js'
+import type { LLMUsageSink } from './llm-usage.js'
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
 
@@ -136,6 +137,7 @@ function greedyCluster<T>(items: T[], embeddings: number[][], threshold: number)
 
 async function synthesizeThemeLabel(
   cluster: ExtractionPair[],
+  onUsage?: LLMUsageSink,
 ): Promise<Result<string>> {
   const bullets = cluster
     .slice(0, 5)
@@ -150,7 +152,7 @@ async function synthesizeThemeLabel(
 
   const raw = await callLLM(
     [{ role: 'user', content: prompt }],
-    { maxTokens: 20, temperature: 0 },
+    { maxTokens: 20, temperature: 0, ...(onUsage ? { onUsage } : {}) },
   )
 
   const cleaned = raw.trim().replace(/^["'`]+|["'`.!?]+$/g, '').trim()
@@ -254,7 +256,7 @@ function clusterByStringDedup(pairs: ExtractionPair[]): ExtractionPair[][] {
 
 export async function aggregateThemes(
   pairs: ExtractionPair[],
-  options?: { skipEmbeddings?: boolean },
+  options?: { skipEmbeddings?: boolean; onUsage?: LLMUsageSink },
 ): Promise<Result<PainPointTheme[]>> {
   try {
     if (pairs.length === 0) return { ok: true, value: [] }
@@ -276,7 +278,7 @@ export async function aggregateThemes(
           cluster.length
 
         const rawTheme = cluster[0].extraction.key_quote
-        const labelResult = await synthesizeThemeLabel(cluster)
+        const labelResult = await synthesizeThemeLabel(cluster, options?.onUsage)
         const synthesized_name = labelResult.ok ? labelResult.value : undefined
 
         return {
