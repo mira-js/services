@@ -1,5 +1,6 @@
 import { OpenAI } from 'openai'
 import { reportUsage, type LLMUsageSink } from './llm-usage.js'
+import { resolveModelName } from './llm-cache.js'
 
 export interface LLMMessage {
   role: 'user' | 'assistant'
@@ -22,7 +23,7 @@ export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Pro
     apiKey,
     baseURL: process.env.OPENAI_BASE_URL ?? 'https://api.deepseek.com',
   })
-  const model = process.env.OPENAI_MODEL?.trim() || process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-chat'
+  const model = resolveModelName()
 
   const response = await client.chat.completions.create({
     model,

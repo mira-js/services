@@ -34,6 +34,14 @@ function fillTemplate(template: string, vars: Record<string, string>): string {
   return Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{{${k}}}`, v), template)
 }
 
+/**
+ * The exact template string `extractBatch` fills, so a caller can hash the same
+ * text for a cache key without resolving `PROMPTS_DIR` a third time.
+ */
+export function loadExtractionTemplate(): string {
+  return loadPrompt('extract_pain_points.txt')
+}
+
 export function stripFences(raw: string): string {
   return raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim()
 }
@@ -168,7 +176,7 @@ export async function extractBatch(
       replies: item.raw_replies.slice(0, 5),
       source: item.source,
     }))
-    const template = loadPrompt('extract_pain_points.txt')
+    const template = loadExtractionTemplate()
     const prompt = fillTemplate(template, { items: JSON.stringify(itemsJson, null, 2) })
     const raw = await callLLM([{ role: 'user', content: prompt }], {
       maxTokens: 1024 * items.length,
