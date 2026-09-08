@@ -34,8 +34,28 @@ function fillTemplate(template: string, vars: Record<string, string>): string {
   return Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{{${k}}}`, v), template)
 }
 
-function stripFences(raw: string): string {
+export function stripFences(raw: string): string {
   return raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim()
+}
+
+// ─── PL-2 Phase 0a diagnostic instrumentation (temporary, env-gated) ──────────
+// Gated behind MIRA_DEBUG_LLM_RAW because raw LLM bodies echo user-submitted
+// post content. Off by default. Fate resolved in Phase 0b (AC-5).
+
+function debugLog(payload: Record<string, unknown>): void {
+  if (process.env.MIRA_DEBUG_LLM_RAW !== '1') return
+  console.info(JSON.stringify({ event: 'pl2_debug', site: 'extractBatch', ...payload }))
+}
+
+if (process.env.MIRA_DEBUG_LLM_RAW === '1') {
+  console.info(
+    JSON.stringify({
+      event: 'pl2_sentinel',
+      message: 'pl2-phase0a instrumentation active',
+      module: 'mira-core/packages/core-services/analysis.ts',
+      resolvedFrom: 'dist',
+    }),
+  )
 }
 
 // ─── Jina embeddings ──────────────────────────────────────────────────────────
@@ -139,6 +159,8 @@ export async function extractBatch(
 ): Promise<Result<ExtractionResult, BatchError>[]> {
   if (!items.length) return []
 
+  let rawResponse = ''
+
   try {
     const itemsJson = items.map((item) => ({
       title: item.title,
@@ -152,14 +174,22 @@ export async function extractBatch(
       maxTokens: 1024 * items.length,
       temperature: 0,
     })
+    rawResponse = raw
     const parsed: unknown = JSON.parse(stripFences(raw))
     const validated = BatchExtractionResultSchema.parse(parsed)
 
     if (validated.length !== items.length) {
+      debugLog({
+        path: 'length-mismatch',
+        itemCount: items.length,
+        resultCount: validated.length,
+        rawLength: rawResponse.length,
+        raw: rawResponse,
+      })
       return items.map((item, index) => ({
         ok: false as const,
         error: new BatchError(
-          `LLM returned ${validated.length} results for ${items.length} items`,
+          `length-mismatch: LLM returned ${validated.length} results for ${items.length} items`,
           index,
           item,
         ),
@@ -168,7 +198,23 @@ export async function extractBatch(
 
     return validated.map((result) => ({ ok: true as const, value: result }))
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
+    const tag =
+      error instanceof z.ZodError
+        ? 'schema-error'
+        : error instanceof SyntaxError
+          ? 'parse-error'
+          : 'llm-error'
+    const baseMessage = error instanceof Error ? error.message : String(error)
+    const errorMessage = `${tag}: ${baseMessage}`
+
+    debugLog({
+      path: tag,
+      itemCount: items.length,
+      rawLength: rawResponse.length,
+      raw: rawResponse,
+      ...(error instanceof z.ZodError ? { zodIssues: JSON.stringify(error.issues) } : {}),
+    })
+
     return items.map((item, index) => ({
       ok: false as const,
       error: new BatchError(errorMessage, index, item),

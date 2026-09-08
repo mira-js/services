@@ -99,7 +99,28 @@ describe('extractBatch', () => {
     for (const result of results) {
       expect(result.ok).toBe(false)
       if (!result.ok) {
-        expect(result.error.message).toBe('network error')
+        expect(result.error.message).toBe('llm-error: network error')
+      }
+    }
+  })
+
+  it('returns all errors tagged schema-error: when sentiment is a string label', async () => {
+    const { callLLM } = await import('../src/llm.js')
+    const items = [makeItem(1), makeItem(2)]
+    vi.mocked(callLLM).mockResolvedValue(
+      JSON.stringify([
+        { ...mockExtraction, sentiment: 'negative' },
+        { ...mockExtraction, sentiment: 'negative' },
+      ]),
+    )
+
+    const results = await extractBatch(items)
+
+    expect(results).toHaveLength(2)
+    for (const result of results) {
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error.message).toMatch(/^schema-error:/)
       }
     }
   })
