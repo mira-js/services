@@ -54,4 +54,22 @@ describe('callLLM', () => {
     // mockCreate was called — the model env logic ran without throwing
     expect(mockCreate).toHaveBeenCalled()
   })
+
+  it('disables thinking when talking to DeepSeek', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'key')
+    vi.stubEnv('OPENAI_BASE_URL', 'https://api.deepseek.com')
+    const { callLLM } = await import('./llm.js')
+    await callLLM([{ role: 'user', content: 'hi' }])
+    expect(mockCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ thinking: { type: 'disabled' } }),
+    )
+  })
+
+  it('omits the thinking field for non-DeepSeek providers', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'key')
+    vi.stubEnv('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+    const { callLLM } = await import('./llm.js')
+    await callLLM([{ role: 'user', content: 'hi' }])
+    expect(mockCreate.mock.lastCall?.[0]).not.toHaveProperty('thinking')
+  })
 })

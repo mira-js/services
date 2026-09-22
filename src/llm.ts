@@ -1,4 +1,5 @@
 import { OpenAI } from 'openai'
+import type { ChatCompletionCreateParamsNonStreaming } from 'openai/resources/chat/completions'
 import { reportUsage, type LLMUsageSink } from './llm-usage.js'
 import { resolveModelName } from './llm-cache.js'
 
@@ -19,20 +20,28 @@ export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Pro
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY (or DEEPSEEK_API_KEY) is missing')
   }
-  const client = new OpenAI({
-    apiKey,
-    baseURL: process.env.OPENAI_BASE_URL ?? 'https://api.deepseek.com',
-  })
+  const baseURL = process.env.OPENAI_BASE_URL ?? 'https://api.deepseek.com'
+  const client = new OpenAI({ apiKey, baseURL })
   const model = resolveModelName()
 
-  const response = await client.chat.completions.create({
+  // DeepSeek V4 models think by default, and reasoning tokens count against
+  // max_tokens: a 256-token budget is spent entirely on reasoning and `content`
+  // comes back empty (finish_reason "length"). Every caller here wants a direct
+  // structured answer, so thinking is disabled. Only sent to DeepSeek — other
+  // OpenAI-compatible providers may reject the unknown field.
+  const params: ChatCompletionCreateParamsNonStreaming & { thinking?: { type: 'disabled' } } = {
     model,
     max_tokens: options?.maxTokens ?? 1024,
     temperature: options?.temperature ?? 0,
     messages: options?.systemPrompt
       ? [{ role: 'system', content: options.systemPrompt }, ...messages]
       : messages,
-  })
+  }
+  if (baseURL.includes('deepseek.com')) {
+    params.thinking = { type: 'disabled' }
+  }
+
+  const response = await client.chat.completions.create(params)
 
   reportUsage(model, response.usage, options?.onUsage)
 
