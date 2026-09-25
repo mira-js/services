@@ -4,6 +4,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { CollectedItem, ExtractionResult, PainPointTheme, Result } from '@mira/shared-core'
 import { BatchError } from '@mira/shared-core'
+import { recordEmbeddingRequest } from '@mira/shared-core/usage-scope'
 import { callLLM } from './llm.js'
 import type { LLMUsageSink } from './llm-usage.js'
 
@@ -88,6 +89,7 @@ async function getEmbeddings(texts: string[]): Promise<number[][]> {
   if (!res.ok) {
     throw new Error(`Jina embeddings failed: ${res.status} ${res.statusText}`)
   }
+  recordEmbeddingRequest()
   const parsed = JinaResponseSchema.parse(await res.json())
   return parsed.data
     .sort((a, b) => a.index - b.index)

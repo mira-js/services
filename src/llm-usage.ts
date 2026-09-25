@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { recordLlmUsage } from '@mira/shared-core/usage-scope'
 
 export interface LLMUsage {
   model: string
@@ -65,6 +66,11 @@ export function reportUsage(model: string, raw: unknown, sink?: LLMUsageSink): v
   const usage = parseUsage(model, raw)
   if (!usage) {
     return
+  }
+  try {
+    recordLlmUsage(usage)
+  } catch {
+    // usage accounting must never break an LLM call
   }
   if (sink) {
     try {

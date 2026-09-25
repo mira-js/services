@@ -18,8 +18,11 @@ export function toJobStatus(state: string): JobStatus {
 }
 
 export const orchestrator = {
-  async enqueue(input: ResearchJobInput) {
+  // `opts.jobId` lets the caller pick the job id up front (e.g. to write its own
+  // history row before the job can start). Omitting it keeps BullMQ's counter id.
+  async enqueue(input: ResearchJobInput, opts: { jobId?: string } = {}) {
     const job = await researchQueue.add('research', input, {
+      ...(opts.jobId ? { jobId: opts.jobId } : {}),
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
     })
