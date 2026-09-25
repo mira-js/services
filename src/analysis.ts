@@ -6,6 +6,7 @@ import type { CollectedItem, ExtractionResult, PainPointTheme, Result } from '@m
 import { BatchError } from '@mira/shared-core'
 import { recordEmbeddingRequest } from '@mira/shared-core/usage-scope'
 import { callLLM } from './llm.js'
+import { mapWithConcurrency } from './concurrency.js'
 import type { LLMUsageSink } from './llm-usage.js'
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
@@ -70,22 +71,34 @@ if (process.env.MIRA_DEBUG_LLM_RAW === '1') {
 
 // ─── Jina embeddings ──────────────────────────────────────────────────────────
 
+// Wraps a network-level fetch throw so the message carries the underlying
+// cause (for example ECONNRESET). The request/response body is never included.
+async function fetchEmbeddings(apiKey: string, texts: string[]): Promise<Response> {
+  try {
+    return await fetch('https://api.jina.ai/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'jina-embeddings-v4',
+        task: 'text-matching',
+        input: texts,
+      }),
+    })
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error)
+    const causeMsg = error instanceof Error && error.cause instanceof Error ? error.cause.message : ''
+    throw new Error(`Jina embeddings request failed: ${msg}${causeMsg ? ` (cause: ${causeMsg})` : ''}`)
+  }
+}
+
 async function getEmbeddings(texts: string[]): Promise<number[][]> {
   if (!process.env.JINA_API_KEY) {
     throw new Error('JINA_API_KEY is required for embeddings')
   }
-  const res = await fetch('https://api.jina.ai/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.JINA_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'jina-embeddings-v4',
-      task: 'text-matching',
-      input: texts,
-    }),
-  })
+  const res = await fetchEmbeddings(process.env.JINA_API_KEY, texts)
   if (!res.ok) {
     throw new Error(`Jina embeddings failed: ${res.status} ${res.statusText}`)
   }
@@ -152,12 +165,20 @@ async function synthesizeThemeLabel(
     'Return ONLY the label — no quotes, no trailing punctuation, no commentary.\n\n' +
     'Pain points:\n' + bullets
 
-  const raw = await callLLM(
+  // A rejected label call must not escape: it would reject the whole bucket.
+  const rawResult = await callLLM(
     [{ role: 'user', content: prompt }],
     { maxTokens: 20, temperature: 0, ...(onUsage ? { onUsage } : {}) },
+  ).then(
+    (value): Result<string> => ({ ok: true, value }),
+    (error: unknown): Result<string> => ({
+      ok: false,
+      error: error instanceof Error ? error : new Error(String(error)),
+    }),
   )
+  if (!rawResult.ok) return rawResult
 
-  const cleaned = raw.trim().replace(/^["'`]+|["'`.!?]+$/g, '').trim()
+  const cleaned = rawResult.value.trim().replace(/^["'`]+|["'`.!?]+$/g, '').trim()
   if (!cleaned) {
     return { ok: false, error: new Error('Empty label from LLM') }
   }
@@ -248,6 +269,11 @@ export async function extractItem(item: CollectedItem): Promise<Result<Extractio
 
 type ExtractionPair = { item: CollectedItem; extraction: ExtractionResult }
 
+// Upper bound on in-flight label-synthesis LLM calls per aggregateThemes call.
+// String-dedup clustering yields roughly one cluster per item, so an unbounded
+// fan-out would fire one concurrent call per item.
+const LABEL_CONCURRENCY = 5
+
 function clusterByStringDedup(pairs: ExtractionPair[]): ExtractionPair[][] {
   const seen = pairs.reduce<Map<string, ExtractionPair[]>>((acc, pair) => {
     const key = pair.extraction.key_quote
@@ -273,30 +299,28 @@ export async function aggregateThemes(
           0.75,
         )
 
-    const built = await Promise.all(
-      clusters.map(async (cluster) => {
-        const avgSentiment =
-          cluster.reduce((sum, p) => sum + Math.max(-1, Math.min(1, p.extraction.sentiment)), 0) /
-          cluster.length
+    const built = await mapWithConcurrency(clusters, LABEL_CONCURRENCY, async (cluster) => {
+      const avgSentiment =
+        cluster.reduce((sum, p) => sum + Math.max(-1, Math.min(1, p.extraction.sentiment)), 0) /
+        cluster.length
 
-        const rawTheme = cluster[0].extraction.key_quote
-        const labelResult = await synthesizeThemeLabel(cluster, options?.onUsage)
-        const synthesized_name = labelResult.ok ? labelResult.value : undefined
+      const rawTheme = cluster[0].extraction.key_quote
+      const labelResult = await synthesizeThemeLabel(cluster, options?.onUsage)
+      const synthesized_name = labelResult.ok ? labelResult.value : undefined
 
-        return {
-          theme: rawTheme,
-          ...(synthesized_name ? { synthesized_name } : {}),
-          frequency: cluster.length,
-          sources: [...new Set(cluster.map((p) => p.item.source))],
-          sentiment: avgSentiment,
-          evidence: cluster.slice(0, 3).map((p) => ({
-            source: p.item.source,
-            url: p.item.url,
-            excerpt: p.extraction.key_quote,
-          })),
-        } satisfies PainPointTheme
-      }),
-    )
+      return {
+        theme: rawTheme,
+        ...(synthesized_name ? { synthesized_name } : {}),
+        frequency: cluster.length,
+        sources: [...new Set(cluster.map((p) => p.item.source))],
+        sentiment: avgSentiment,
+        evidence: cluster.slice(0, 3).map((p) => ({
+          source: p.item.source,
+          url: p.item.url,
+          excerpt: p.extraction.key_quote,
+        })),
+      } satisfies PainPointTheme
+    })
 
     return {
       ok: true,
