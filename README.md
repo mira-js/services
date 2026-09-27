@@ -185,7 +185,7 @@ The services work together to implement the full mira research pipeline:
 |----------|----------|---------|-------------|
 | `OPENAI_API_KEY` | Yes | — | LLM provider API key |
 | `OPENAI_BASE_URL` | No | DeepSeek | Any OpenAI-compatible base URL |
-| `OPENAI_MODEL` | No | `deepseek-chat` | Model to use for extraction and synthesis |
+| `OPENAI_MODEL` | No | `deepseek-v4.1-flash` | Model to use for extraction and synthesis |
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string |
 | `REDIS_URL` | Yes | — | Redis connection string |
 | `JINA_API_KEY` | No | — | Required for embeddings and clustering |

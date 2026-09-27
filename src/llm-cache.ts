@@ -38,7 +38,7 @@ function sha256(value: string): string {
  * key, so the key and the request can never disagree.
  */
 export function resolveModelName(): string {
-  return process.env.OPENAI_MODEL?.trim() || process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-chat'
+  return process.env.OPENAI_MODEL?.trim() || process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-v4.1-flash'
 }
 
 // ─── Key computation ──────────────────────────────────────────────────────────
