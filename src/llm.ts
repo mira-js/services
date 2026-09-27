@@ -8,11 +8,19 @@ export interface LLMMessage {
   content: string
 }
 
+/**
+ * `'json_object'` asks the provider for a JSON-only reply (OpenAI/DeepSeek JSON
+ * mode). The prompt must then contain the word "json" and request an object
+ * root. `'text'` (or omitting it) sends no `response_format` at all.
+ */
+export type LLMResponseFormat = 'text' | 'json_object'
+
 export interface LLMOptions {
   systemPrompt?: string
   maxTokens?: number
   temperature?: number
   onUsage?: LLMUsageSink
+  responseFormat?: LLMResponseFormat
 }
 
 export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Promise<string> {
@@ -39,6 +47,11 @@ export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Pro
   }
   if (baseURL.includes('deepseek.com')) {
     params.thinking = { type: 'disabled' }
+  }
+  // Sent for any provider: an OpenAI-compatible endpoint that rejects the field
+  // fails the call loudly (llm-error) rather than degrading silently.
+  if (options?.responseFormat === 'json_object') {
+    params.response_format = { type: 'json_object' }
   }
 
   const response = await client.chat.completions.create(params)

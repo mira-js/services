@@ -2,17 +2,24 @@ import { createHash } from 'node:crypto'
 import type { z } from 'zod'
 import type { Result } from '@mira/shared-core'
 import { query } from './db.js'
+// Type-only: llm.ts imports resolveModelName from here, so a value import would be a runtime cycle.
+import type { LLMResponseFormat } from './llm.js'
 
 // ─── Key versioning ───────────────────────────────────────────────────────────
 
 /**
- * Bump on ANY change that makes an already-cached result no longer equivalent
- * to what a fresh call would produce:
- *   - the per-item payload projection (`payloadOf` in the API call sites —
- *     `packages/api/src/services/pipeline/{categorization,extraction}.ts`;
+ * Bump rule per ADR-013 (amended 2026-09-27). Bump when a change can alter the
+ * value produced for a reply that previously parsed successfully, or when:
+ *   - the per-item payload projection changes (`payloadOf` in the API call
+ *     sites — `packages/api/src/services/pipeline/{categorization,extraction}.ts`;
  *     bump discipline is therefore cross-package),
- *   - the output contract (`stripFences` / enabling a JSON `response_format`),
- *   - a result Zod schema (`CategorizationResult`, `ExtractionResultSchema`).
+ *   - a result Zod schema changes (`CategorizationResult`, `ExtractionResultSchema`).
+ *
+ * A request parameter that shapes the output goes into the key input instead
+ * of forcing a bump: `response_format` is now carried as
+ * `AnalysisCacheKeyInput.responseFormat`, so enabling JSON mode re-keys only the
+ * calls that use it. Hardening `stripFences` so it rescues replies that used to
+ * fail to parse needs no bump either, because failed replies are never cached.
  */
 export const CACHE_KEY_VERSION = 'v1'
 
@@ -46,21 +53,27 @@ export interface AnalysisCacheKeyInput {
   template: string
   model: string
   payload: unknown
+  /** The `response_format` sent with the call. Omitted or `'text'` leaves the key unchanged. */
+  responseFormat?: LLMResponseFormat
 }
 
 /**
  * Hashes a fixed-order array (never `Object.keys`/iteration) so field order can
  * never drift, and an array rather than a `:`-joined string so the
- * variable-length `kind`/`model` fields cannot alias each other.
+ * variable-length `kind`/`model` fields cannot alias each other. A non-text
+ * `responseFormat` is appended as a trailing element, so text-format keys stay
+ * byte-identical to the keys computed before the field existed.
  */
 export function computeAnalysisCacheKey(input: AnalysisCacheKeyInput): string {
   const promptVersion = computeAnalysisPromptVersion(input.template)
+  const formatElement = input.responseFormat && input.responseFormat !== 'text' ? [input.responseFormat] : []
   const canonical = JSON.stringify([
     CACHE_KEY_VERSION,
     input.kind,
     promptVersion,
     input.model,
     JSON.stringify(input.payload),
+    ...formatElement,
   ])
   return sha256(canonical)
 }
