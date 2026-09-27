@@ -82,7 +82,7 @@ describe('computeAnalysisCacheKey', () => {
 describe('resolveModelName', () => {
   it('prefers OPENAI_MODEL, then DEEPSEEK_MODEL, then the default', async () => {
     const { resolveModelName } = await import('../src/llm-cache.js')
-    expect(resolveModelName()).toBe('deepseek-chat')
+    expect(resolveModelName()).toBe('deepseek-v4.1-flash')
     process.env.DEEPSEEK_MODEL = 'ds'
     expect(resolveModelName()).toBe('ds')
     process.env.OPENAI_MODEL = 'oa'
