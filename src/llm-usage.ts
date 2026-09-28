@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { recordLlmUsage } from '@mira/shared-core/usage-scope'
+import { logger } from '@mira/shared-core/logger'
 
 export interface LLMUsage {
   model: string
@@ -81,6 +82,6 @@ export function reportUsage(model: string, raw: unknown, sink?: LLMUsageSink): v
     return
   }
   if (process.env.MIRA_LOG_LLM_USAGE === '1') {
-    console.info(JSON.stringify({ event: 'llm_usage', ...usage }))
+    logger.info('llm_usage', { event: 'llm_usage', ...usage })
   }
 }

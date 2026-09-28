@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import type { CollectedItem, ExtractionResult, PainPointTheme, Result } from '@mira/shared-core'
 import { BatchError } from '@mira/shared-core'
 import { recordEmbeddingRequest } from '@mira/shared-core/usage-scope'
+import { logger } from '@mira/shared-core/logger'
 import { callLLM } from './llm.js'
 import { mapWithConcurrency } from './concurrency.js'
 import type { LLMUsageSink } from './llm-usage.js'
@@ -93,18 +94,16 @@ export function stripFences(raw: string): string {
 
 function debugLog(payload: Record<string, unknown>): void {
   if (process.env.MIRA_DEBUG_LLM_RAW !== '1') return
-  console.info(JSON.stringify({ event: 'pl2_debug', site: 'extractBatch', ...payload }))
+  logger.info('pl2_debug', { event: 'pl2_debug', site: 'extractBatch', ...payload })
 }
 
 if (process.env.MIRA_DEBUG_LLM_RAW === '1') {
-  console.info(
-    JSON.stringify({
-      event: 'pl2_sentinel',
-      message: 'pl2-phase0a instrumentation active',
-      module: 'mira-core/packages/core-services/analysis.ts',
-      resolvedFrom: 'dist',
-    }),
-  )
+  logger.info('pl2_sentinel', {
+    event: 'pl2_sentinel',
+    message: 'pl2-phase0a instrumentation active',
+    module: 'mira-core/packages/core-services/analysis.ts',
+    resolvedFrom: 'dist',
+  })
 }
 
 // ─── Jina embeddings ──────────────────────────────────────────────────────────

@@ -27,7 +27,7 @@ describe('callLLM — no console.log of prompts or responses', () => {
     expect(src).not.toContain('console.log')
   })
 
-  it('does not call console.log when callLLM is invoked', async () => {
+  it('does not call logger.info with pl2_finish_reason when MIRA_DEBUG_LLM_RAW is unset', async () => {
     const mockCreate = vi.fn().mockResolvedValue({
       choices: [{ message: { content: 'hello' } }],
       usage: { total_tokens: 5 },
@@ -36,12 +36,13 @@ describe('callLLM — no console.log of prompts or responses', () => {
       chat: { completions: { create: mockCreate } },
     }) as unknown as OpenAI)
 
-    const consoleSpy = vi.spyOn(console, 'log')
+    const { logger } = await import('@mira/shared-core/logger')
+    const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {})
 
     const { callLLM } = await import('../src/llm.js')
     await callLLM([{ role: 'user', content: 'test prompt' }])
 
-    expect(consoleSpy).not.toHaveBeenCalled()
-    consoleSpy.mockRestore()
+    expect(infoSpy).not.toHaveBeenCalled()
+    infoSpy.mockRestore()
   })
 })

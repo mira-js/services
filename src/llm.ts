@@ -1,5 +1,6 @@
 import { OpenAI } from 'openai'
 import type { ChatCompletionCreateParamsNonStreaming } from 'openai/resources/chat/completions'
+import { logger } from '@mira/shared-core/logger'
 import { reportUsage, type LLMUsageSink } from './llm-usage.js'
 import { resolveModelName } from './llm-cache.js'
 
@@ -61,14 +62,12 @@ export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Pro
   // PL-2 Phase 0a diagnostic (temporary, env-gated; off by default). No prompt
   // or response text is emitted here — only the provider's stop reason.
   if (process.env.MIRA_DEBUG_LLM_RAW === '1') {
-    console.info(
-      JSON.stringify({
-        event: 'pl2_finish_reason',
-        model,
-        finishReason: response.choices[0].finish_reason,
-        maxTokens: options?.maxTokens ?? 1024,
-      }),
-    )
+    logger.info('pl2_finish_reason', {
+      event: 'pl2_finish_reason',
+      model,
+      finishReason: response.choices[0].finish_reason,
+      maxTokens: options?.maxTokens ?? 1024,
+    })
   }
 
   return response.choices[0].message.content ?? ''

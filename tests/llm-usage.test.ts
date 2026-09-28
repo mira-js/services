@@ -122,31 +122,32 @@ describe('callLLM — usage reporting', () => {
     expect(onUsage).toHaveBeenCalledTimes(1)
   })
 
-  it('env fallback: console.info fires once with MIRA_LOG_LLM_USAGE=1 and no sink, silent when unset', async () => {
+  it('env fallback: logger.info fires once with MIRA_LOG_LLM_USAGE=1 and no sink, silent when unset', async () => {
     process.env.OPENAI_MODEL = 'deepseek-chat'
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'c' } }],
       usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
     })
     const { callLLM } = await import('../src/llm.js')
-    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const { logger } = await import('@mira/shared-core/logger')
+    const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {})
 
     process.env.MIRA_LOG_LLM_USAGE = '1'
     await callLLM([{ role: 'user', content: 'hi' }])
     expect(infoSpy).toHaveBeenCalledTimes(1)
 
-    // The emitted line must be parseable JSON carrying the fields a cost
-    // rollup reads — asserting only the call count would pass on `[object Object]`.
-    const [logged] = infoSpy.mock.calls[0]
-    expect(typeof logged).toBe('string')
-    const parsed: unknown = JSON.parse(String(logged))
-    expect(parsed).toMatchObject({
-      event: 'llm_usage',
-      model: 'deepseek-chat',
-      promptTokens: 3,
-      completionTokens: 2,
-      totalTokens: 5,
-    })
+    // The event must carry the fields a cost rollup reads — asserting only
+    // the call count would pass on any argument shape.
+    expect(infoSpy).toHaveBeenCalledWith(
+      'llm_usage',
+      expect.objectContaining({
+        event: 'llm_usage',
+        model: 'deepseek-chat',
+        promptTokens: 3,
+        completionTokens: 2,
+        totalTokens: 5,
+      }),
+    )
 
     infoSpy.mockClear()
     delete process.env.MIRA_LOG_LLM_USAGE
