@@ -91,25 +91,28 @@ describe('aggregateThemes — label synthesis resilience', () => {
     expect(result.error.message).toContain('ECONNRESET')
   })
 
-  it('[unhappy] embeddings fetch returns 429 with a response body → ok:false, message contains status but never the body', async () => {
+  it('[unhappy] embeddings fetch persistently returns 429 → ok:false after JINA_MAX_RETRIES retries, message contains status but never the body', async () => {
     process.env.JINA_API_KEY = 'test-key'
-    vi.mocked(fetch).mockResolvedValue({
-      ok: false,
-      status: 429,
-      statusText: 'Too Many Requests',
-      json: async () => ({ error: 'secret-body' }),
-      text: async () => 'secret-body',
-    } as Response)
+    vi.mocked(fetch).mockImplementation(async () => new Response('secret-body', { status: 429, statusText: 'Too Many Requests' }))
+    vi.useFakeTimers()
 
-    const { aggregateThemes } = await import('../src/analysis.js')
-    const pairs = [makePair('quote-a')]
+    try {
+      const { aggregateThemes } = await import('../src/analysis.js')
+      const { JINA_MAX_RETRIES } = await import('../src/jina-retry.js')
+      const pairs = [makePair('quote-a')]
 
-    const result = await aggregateThemes(pairs, { skipEmbeddings: false })
+      const resultPromise = aggregateThemes(pairs, { skipEmbeddings: false })
+      await vi.runAllTimersAsync()
+      const result = await resultPromise
 
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.error.message).toContain('429')
-    expect(result.error.message).not.toContain('secret-body')
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      expect(result.error.message).toContain('429')
+      expect(result.error.message).not.toContain('secret-body')
+      expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1 + JINA_MAX_RETRIES)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('[happy] label synthesis runs with bounded concurrency — max in-flight <= 5, 12 themes returned', async () => {

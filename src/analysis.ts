@@ -8,6 +8,7 @@ import { recordEmbeddingRequest } from '@mira/shared-core/usage-scope'
 import { logger } from '@mira/shared-core/logger'
 import { callLLM } from './llm.js'
 import { mapWithConcurrency } from './concurrency.js'
+import { fetchWithRetryOn429 } from './jina-retry.js'
 import type { LLMUsageSink } from './llm-usage.js'
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
@@ -135,7 +136,8 @@ async function getEmbeddings(texts: string[]): Promise<number[][]> {
   if (!process.env.JINA_API_KEY) {
     throw new Error('JINA_API_KEY is required for embeddings')
   }
-  const res = await fetchEmbeddings(process.env.JINA_API_KEY, texts)
+  const apiKey = process.env.JINA_API_KEY
+  const res = await fetchWithRetryOn429(() => fetchEmbeddings(apiKey, texts))
   if (!res.ok) {
     throw new Error(`Jina embeddings failed: ${res.status} ${res.statusText}`)
   }
