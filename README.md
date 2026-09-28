@@ -183,9 +183,9 @@ The services work together to implement the full mira research pipeline:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | Yes | — | LLM provider API key |
-| `OPENAI_BASE_URL` | No | DeepSeek | Any OpenAI-compatible base URL |
-| `OPENAI_MODEL` | No | `deepseek-v4.1-flash` | Model to use for extraction and synthesis |
+| `LLM_API_KEY` | Yes | — | LLM provider API key |
+| `LLM_BASE_URL` | No | DeepSeek | Any OpenAI-compatible base URL |
+| `LLM_MODEL` | No | `deepseek-flash` | Model to use for extraction and synthesis |
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string |
 | `REDIS_URL` | Yes | — | Redis connection string |
 | `JINA_API_KEY` | No | — | Required for embeddings and clustering |
@@ -237,9 +237,13 @@ Required files:
 Use any OpenAI-compatible provider:
 
 ```ts
-process.env.OPENAI_BASE_URL = 'https://api.groq.com/openai/v1'
-process.env.OPENAI_MODEL = 'llama-3.3-70b-versatile'
+process.env.LLM_BASE_URL = 'https://api.groq.com/openai/v1'
+process.env.LLM_MODEL = 'llama-3.3-70b-versatile'
 ```
+
+All three settings are resolved by `resolveLLMConfig()` (`src/llm-config.ts`, ADR-022). Values are trimmed, and an empty value counts as unset.
+
+**Legacy names (deprecated, read for one release).** `OPENAI_API_KEY` and `DEEPSEEK_API_KEY` fall back for `LLM_API_KEY`, `OPENAI_BASE_URL` for `LLM_BASE_URL`, and `OPENAI_MODEL` then `DEEPSEEK_MODEL` for `LLM_MODEL`. The canonical name always wins, and reading a legacy name logs one deprecation warning per process.
 
 ### Concurrency Tuning
 

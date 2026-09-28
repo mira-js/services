@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto'
 import type { z } from 'zod'
 import type { Result } from '@mira/shared-core'
 import { query } from './db.js'
-// Type-only: llm.ts imports resolveModelName from here, so a value import would be a runtime cycle.
+// Type-only: keeps this module free of llm.ts's runtime deps (openai client).
 import type { LLMResponseFormat } from './llm.js'
+import { resolveLLMConfig } from './llm-config.js'
 
 // ─── Key versioning ───────────────────────────────────────────────────────────
 
@@ -34,11 +35,12 @@ function sha256(value: string): string {
 // ─── Model name ───────────────────────────────────────────────────────────────
 
 /**
- * Single source of truth for the model name, shared by `callLLM` and the cache
- * key, so the key and the request can never disagree.
+ * The model name used in the cache key. Delegates to `resolveLLMConfig` (the
+ * same resolver `callLLM` uses), so the key and the request can never disagree.
+ * Precedence: `LLM_MODEL` > `OPENAI_MODEL` > `DEEPSEEK_MODEL` > `deepseek-flash`.
  */
 export function resolveModelName(): string {
-  return process.env.OPENAI_MODEL?.trim() || process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-v4.1-flash'
+  return resolveLLMConfig().model
 }
 
 // ─── Key computation ──────────────────────────────────────────────────────────

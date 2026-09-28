@@ -7,6 +7,7 @@ import { BatchError } from '@mira/shared-core'
 import { recordEmbeddingRequest } from '@mira/shared-core/usage-scope'
 import { logger } from '@mira/shared-core/logger'
 import { callLLM } from './llm.js'
+import { debugRawEnabled } from './debug.js'
 import { mapWithConcurrency } from './concurrency.js'
 import { fetchWithRetryOn429 } from './jina-retry.js'
 import type { LLMUsageSink } from './llm-usage.js'
@@ -94,11 +95,11 @@ export function stripFences(raw: string): string {
 // post content. Off by default. Fate resolved in Phase 0b (AC-5).
 
 function debugLog(payload: Record<string, unknown>): void {
-  if (process.env.MIRA_DEBUG_LLM_RAW !== '1') return
+  if (!debugRawEnabled()) return
   logger.info('pl2_debug', { event: 'pl2_debug', site: 'extractBatch', ...payload })
 }
 
-if (process.env.MIRA_DEBUG_LLM_RAW === '1') {
+if (debugRawEnabled()) {
   logger.info('pl2_sentinel', {
     event: 'pl2_sentinel',
     message: 'pl2-phase0a instrumentation active',
@@ -133,10 +134,10 @@ async function fetchEmbeddings(apiKey: string, texts: string[]): Promise<Respons
 }
 
 async function getEmbeddings(texts: string[]): Promise<number[][]> {
-  if (!process.env.JINA_API_KEY) {
+  const apiKey = process.env.JINA_API_KEY
+  if (!apiKey) {
     throw new Error('JINA_API_KEY is required for embeddings')
   }
-  const apiKey = process.env.JINA_API_KEY
   const res = await fetchWithRetryOn429(() => fetchEmbeddings(apiKey, texts))
   if (!res.ok) {
     throw new Error(`Jina embeddings failed: ${res.status} ${res.statusText}`)

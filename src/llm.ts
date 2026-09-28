@@ -2,7 +2,8 @@ import { OpenAI } from 'openai'
 import type { ChatCompletionCreateParamsNonStreaming } from 'openai/resources/chat/completions'
 import { logger } from '@mira/shared-core/logger'
 import { reportUsage, type LLMUsageSink } from './llm-usage.js'
-import { resolveModelName } from './llm-cache.js'
+import { resolveLLMConfig, warnLegacyLLMEnvOnce } from './llm-config.js'
+import { debugRawEnabled } from './debug.js'
 
 export interface LLMMessage {
   role: 'user' | 'assistant'
@@ -25,13 +26,13 @@ export interface LLMOptions {
 }
 
 export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Promise<string> {
-  const apiKey = (process.env.OPENAI_API_KEY ?? process.env.DEEPSEEK_API_KEY)?.trim()
+  const cfg = resolveLLMConfig()
+  warnLegacyLLMEnvOnce(cfg.legacyVarsUsed, (m) => logger.warn(m, { event: 'llm_env_deprecated' }))
+  const { apiKey, baseURL, model } = cfg
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY (or DEEPSEEK_API_KEY) is missing')
+    throw new Error('LLM_API_KEY is missing (legacy OPENAI_API_KEY / DEEPSEEK_API_KEY are also read)')
   }
-  const baseURL = process.env.OPENAI_BASE_URL ?? 'https://api.deepseek.com'
   const client = new OpenAI({ apiKey, baseURL })
-  const model = resolveModelName()
 
   // DeepSeek V4 models think by default, and reasoning tokens count against
   // max_tokens: a 256-token budget is spent entirely on reasoning and `content`
@@ -61,7 +62,7 @@ export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Pro
 
   // PL-2 Phase 0a diagnostic (temporary, env-gated; off by default). No prompt
   // or response text is emitted here — only the provider's stop reason.
-  if (process.env.MIRA_DEBUG_LLM_RAW === '1') {
+  if (debugRawEnabled()) {
     logger.info('pl2_finish_reason', {
       event: 'pl2_finish_reason',
       model,

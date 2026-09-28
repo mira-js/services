@@ -15,6 +15,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  delete process.env.LLM_MODEL
   delete process.env.OPENAI_MODEL
   delete process.env.DEEPSEEK_MODEL
   delete process.env.MIRA_LLM_CACHE_TTL_DAYS
@@ -80,12 +81,21 @@ describe('computeAnalysisCacheKey', () => {
 })
 
 describe('resolveModelName', () => {
-  it('prefers OPENAI_MODEL, then DEEPSEEK_MODEL, then the default', async () => {
+  it('[happy] defaults to deepseek-flash, then prefers DEEPSEEK_MODEL, then OPENAI_MODEL, then LLM_MODEL', async () => {
     const { resolveModelName } = await import('../src/llm-cache.js')
-    expect(resolveModelName()).toBe('deepseek-v4.1-flash')
+    expect(resolveModelName()).toBe('deepseek-flash')
     process.env.DEEPSEEK_MODEL = 'ds'
     expect(resolveModelName()).toBe('ds')
     process.env.OPENAI_MODEL = 'oa'
+    expect(resolveModelName()).toBe('oa')
+    process.env.LLM_MODEL = 'canonical'
+    expect(resolveModelName()).toBe('canonical')
+  })
+
+  it('[unhappy] falls through to OPENAI_MODEL when LLM_MODEL is whitespace', async () => {
+    process.env.LLM_MODEL = '   '
+    process.env.OPENAI_MODEL = 'oa'
+    const { resolveModelName } = await import('../src/llm-cache.js')
     expect(resolveModelName()).toBe('oa')
   })
 })
