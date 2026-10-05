@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { Queue } from 'bullmq'
 import { Redis } from 'ioredis'
 import type { JobStatus, ResearchJobInput, ResearchResult } from '@mira/shared-core'

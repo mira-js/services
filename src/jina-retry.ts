@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { logger } from '@mira/shared-core/logger'
 
 // Jina embeddings 429 retry. Only rate-limit responses are retried; every other

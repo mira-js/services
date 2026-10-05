@@ -1,7 +1,7 @@
 # @mira/core-services
 
 [![npm](https://img.shields.io/npm/v/@mira/core-services)](https://www.npmjs.com/package/@mira/core-services)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](https://github.com/mira-js/mira-core/blob/main/LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 
 Shared service implementations for the mira pipeline. This package contains the core business logic for job orchestration, LLM analysis, database operations, and Redis/OpenViking integration. Used by `@mira/api-core` and any custom implementations that need to reuse the pipeline logic.
 
@@ -255,3 +255,9 @@ mira_OPENVIKING_INGEST_CONCURRENCY=5  # Slower OpenViking writes
 ```
 
 ---
+
+## License
+
+AGPL-3.0-only — see [LICENSE](./LICENSE).
+
+Copyright (C) 2026 Fernando Nieto Pallares

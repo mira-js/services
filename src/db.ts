@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { Pool } from 'pg'
 import type { Result } from '@mira/shared-core'
 

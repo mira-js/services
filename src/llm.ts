@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { OpenAI } from 'openai'
 import type { ChatCompletionCreateParamsNonStreaming } from 'openai/resources/chat/completions'
 import { logger } from '@mira/shared-core/logger'

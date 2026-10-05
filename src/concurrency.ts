@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,

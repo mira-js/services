@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CoreSource, type CollectedItem } from '@mira/shared-core'
 import { openVikingClient } from './openviking'

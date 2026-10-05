@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { z } from 'zod'
 import { recordLlmUsage } from '@mira/shared-core/usage-scope'
 import { logger } from '@mira/shared-core/logger'

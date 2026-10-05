@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Zero imports on purpose: evals/runner imports this file by relative source path (ADR-022). Do not add imports.
 
 /**
