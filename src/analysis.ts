@@ -208,7 +208,7 @@ async function synthesizeThemeLabel(
   // A rejected label call must not escape: it would reject the whole bucket.
   const rawResult = await callLLM(
     [{ role: 'user', content: prompt }],
-    { maxTokens: 20, temperature: 0, ...(onUsage ? { onUsage } : {}) },
+    { maxTokens: 32, temperature: 0, ...(onUsage ? { onUsage } : {}) },
   ).then(
     (value): Result<string> => ({ ok: true, value }),
     (error: unknown): Result<string> => ({

@@ -25,6 +25,27 @@ export interface LLMOptions {
   responseFormat?: LLMResponseFormat
 }
 
+export type LLMResponseErrorReason = 'no_choices' | 'empty' | 'length'
+
+/**
+ * The provider answered, but the reply is unusable: no choices, truncated by the
+ * token budget, or empty. The message names the reason, model and finish reason
+ * only — never prompt or response text.
+ */
+export class LLMResponseError extends Error {
+  readonly reason: LLMResponseErrorReason
+  readonly finishReason: string | null
+  readonly model: string
+
+  constructor(reason: LLMResponseErrorReason, model: string, finishReason: string | null) {
+    super(`LLM reply unusable (${reason}) from model ${model}, finish_reason=${finishReason ?? 'none'}`)
+    this.name = 'LLMResponseError'
+    this.reason = reason
+    this.finishReason = finishReason
+    this.model = model
+  }
+}
+
 export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Promise<string> {
   const cfg = resolveLLMConfig()
   warnLegacyLLMEnvOnce(cfg.legacyVarsUsed, (m) => logger.warn(m, { event: 'llm_env_deprecated' }))
@@ -60,16 +81,27 @@ export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Pro
 
   reportUsage(model, response.usage, options?.onUsage)
 
+  const choice = response.choices[0]
+  if (!choice) throw new LLMResponseError('no_choices', model, null)
+  const finishReason = choice.finish_reason ?? null
+
   // PL-2 Phase 0a diagnostic (temporary, env-gated; off by default). No prompt
   // or response text is emitted here — only the provider's stop reason.
   if (debugRawEnabled()) {
     logger.info('pl2_finish_reason', {
       event: 'pl2_finish_reason',
       model,
-      finishReason: response.choices[0].finish_reason,
+      finishReason,
       maxTokens: options?.maxTokens ?? 1024,
     })
   }
 
-  return response.choices[0].message.content ?? ''
+  // A truncated reply is a failure even when content is non-empty: a partial
+  // JSON object or label parses or reads as valid and corrupts downstream data.
+  if (finishReason === 'length') throw new LLMResponseError('length', model, finishReason)
+
+  const content = choice.message.content
+  if (content == null || content.trim() === '') throw new LLMResponseError('empty', model, finishReason)
+
+  return content
 }
