@@ -4,7 +4,8 @@
  * Canonical LLM environment resolver (ADR-022). The only place in TypeScript
  * that reads the LLM key, base URL and model. Precedence per setting is
  * canonical name, then legacy names, then the default. Values are trimmed and
- * an empty or whitespace-only value counts as unset.
+ * an empty or whitespace-only value counts as unset. It also owns the decision
+ * whether to send `thinking: {type: disabled}` (`shouldDisableThinking`).
  */
 
 export interface LLMConfig {
@@ -91,6 +92,28 @@ const CANONICAL_FOR: Readonly<Record<string, string>> = {
   OPENAI_MODEL: 'LLM_MODEL',
   DEEPSEEK_MODEL: 'LLM_MODEL',
   EVAL_API_URL: 'LLM_BASE_URL',
+}
+
+/** True when the URL's hostname is `deepseek.com` or a subdomain. Never throws. */
+export function isDeepSeekHost(baseURL: string): boolean {
+  try {
+    const host = new URL(baseURL).hostname
+    return host === 'deepseek.com' || host.endsWith('.deepseek.com')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether callLLM should send `thinking: {type: disabled}`. `LLM_DISABLE_THINKING`
+ * is tri-state: true/1 forces it (proxies in front of DeepSeek), false/0 never
+ * sends it, anything else falls back to DeepSeek hostname detection.
+ */
+export function shouldDisableThinking(baseURL: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const override = readTrimmed(env, 'LLM_DISABLE_THINKING')?.toLowerCase()
+  if (override === 'true' || override === '1') return true
+  if (override === 'false' || override === '0') return false
+  return isDeepSeekHost(baseURL)
 }
 
 const warnedLegacyNames = new Set<string>()

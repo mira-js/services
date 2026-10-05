@@ -31,6 +31,7 @@ describe('callLLM', () => {
       'LLM_MODEL',
       'OPENAI_MODEL',
       'DEEPSEEK_MODEL',
+      'LLM_DISABLE_THINKING',
     ]) {
       vi.stubEnv(n, '')
     }
@@ -97,6 +98,34 @@ describe('callLLM', () => {
     await callLLM([{ role: 'user', content: 'hi' }])
     expect(mockCreate).toHaveBeenLastCalledWith(
       expect.objectContaining({ thinking: { type: 'disabled' }, model: 'deepseek-flash' }),
+    )
+  })
+
+  it('[unhappy] omits thinking when the DeepSeek hostname appears only in the URL path', async () => {
+    vi.stubEnv('LLM_API_KEY', 'k')
+    vi.stubEnv('LLM_BASE_URL', 'https://proxy.example.com/deepseek.com/v1')
+    const { callLLM } = await import('../src/llm.js')
+    await callLLM([{ role: 'user', content: 'hi' }])
+    expect(mockCreate.mock.lastCall?.[0]).not.toHaveProperty('thinking')
+  })
+
+  it('[happy] disables thinking under the prod configuration (only LLM_API_KEY set, default base URL)', async () => {
+    vi.stubEnv('LLM_API_KEY', 'k')
+    const { callLLM } = await import('../src/llm.js')
+    await callLLM([{ role: 'user', content: 'hi' }])
+    expect(mockCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ thinking: { type: 'disabled' } }),
+    )
+  })
+
+  it('[happy] disables thinking behind a non-DeepSeek proxy when LLM_DISABLE_THINKING=true', async () => {
+    vi.stubEnv('LLM_API_KEY', 'k')
+    vi.stubEnv('LLM_BASE_URL', 'https://openrouter.ai/api/v1')
+    vi.stubEnv('LLM_DISABLE_THINKING', 'true')
+    const { callLLM } = await import('../src/llm.js')
+    await callLLM([{ role: 'user', content: 'hi' }])
+    expect(mockCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ thinking: { type: 'disabled' } }),
     )
   })
 

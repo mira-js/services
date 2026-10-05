@@ -2,7 +2,7 @@ import { OpenAI } from 'openai'
 import type { ChatCompletionCreateParamsNonStreaming } from 'openai/resources/chat/completions'
 import { logger } from '@mira/shared-core/logger'
 import { reportUsage, type LLMUsageSink } from './llm-usage.js'
-import { resolveLLMConfig, warnLegacyLLMEnvOnce } from './llm-config.js'
+import { resolveLLMConfig, shouldDisableThinking, warnLegacyLLMEnvOnce } from './llm-config.js'
 import { debugRawEnabled } from './debug.js'
 
 export interface LLMMessage {
@@ -58,8 +58,9 @@ export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Pro
   // DeepSeek V4 models think by default, and reasoning tokens count against
   // max_tokens: a 256-token budget is spent entirely on reasoning and `content`
   // comes back empty (finish_reason "length"). Every caller here wants a direct
-  // structured answer, so thinking is disabled. Only sent to DeepSeek — other
-  // OpenAI-compatible providers may reject the unknown field.
+  // structured answer, so thinking is disabled. Only sent when the host is
+  // DeepSeek or LLM_DISABLE_THINKING forces it (proxies in front of DeepSeek) —
+  // other OpenAI-compatible providers may reject the unknown field.
   const params: ChatCompletionCreateParamsNonStreaming & { thinking?: { type: 'disabled' } } = {
     model,
     max_tokens: options?.maxTokens ?? 1024,
@@ -68,7 +69,7 @@ export async function callLLM(messages: LLMMessage[], options?: LLMOptions): Pro
       ? [{ role: 'system', content: options.systemPrompt }, ...messages]
       : messages,
   }
-  if (baseURL.includes('deepseek.com')) {
+  if (shouldDisableThinking(baseURL)) {
     params.thinking = { type: 'disabled' }
   }
   // Sent for any provider: an OpenAI-compatible endpoint that rejects the field
