@@ -8,6 +8,9 @@ import { BatchError } from '@mira/shared-core'
 import { recordEmbeddingRequest } from '@mira/shared-core/usage-scope'
 import { logger } from '@mira/shared-core/logger'
 import { callLLM } from './llm.js'
+import type { LLMMessage } from './llm.js'
+import { selectSynthesisInput, findMissingSections } from './synthesis-input.js'
+import type { ThemeBuckets, SynthesisSample, SynthesisBucket } from './synthesis-input.js'
 import { debugRawEnabled } from './debug.js'
 import { mapWithConcurrency } from './concurrency.js'
 import { fetchWithRetryOn429 } from './jina-retry.js'
@@ -372,16 +375,82 @@ export async function aggregateThemes(
   }
 }
 
+const SYNTHESIS_MAX_TOKENS = 4096
+const SYNTHESIS_RETRY_MAX_TOKENS = 8192
+
+type LLMReplyFailure = { reason: string | null; finishReason: string | null }
+
+// Structural check: `./llm.js` is mocked with only `callLLM` in some suites, so
+// `instanceof LLMResponseError` would throw on an undefined class.
+function describeLLMResponseError(error: unknown): LLMReplyFailure | null {
+  if (!(error instanceof Error) || error.name !== 'LLMResponseError') return null
+  const reason = 'reason' in error && typeof error.reason === 'string' ? error.reason : null
+  const finishReason = 'finishReason' in error && typeof error.finishReason === 'string' ? error.finishReason : null
+  return { reason, finishReason }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function failSynthesis(error: unknown, maxTokens: number): Result<string> {
+  const failure = describeLLMResponseError(error) ?? { reason: null, finishReason: null }
+  logger.warn('Report synthesis reply unusable', { event: 'synthesis_reply_unusable', ...failure, maxTokens })
+  return { ok: false, error: toError(error) }
+}
+
 export async function synthesizeReport(
   query: string,
-  themes: { painPoints: PainPointTheme[]; competitorWeaknesses: PainPointTheme[]; emergingGaps: PainPointTheme[] },
+  themes: ThemeBuckets & { sample?: SynthesisSample },
 ): Promise<Result<string>> {
   try {
     const template = loadPrompt('synthesize_report.txt')
-    const prompt = fillTemplate(template, { query, themes: JSON.stringify(themes, null, 2) })
-    const value = await callLLM([{ role: 'user', content: prompt }], { maxTokens: 2048, temperature: 0.2 })
-    return { ok: true, value }
+    const input = selectSynthesisInput(themes, themes.sample)
+    logger.info('Synthesis input selected', {
+      event: 'synthesis_input',
+      sample: input.sample,
+      painPoints: bucketCounts(input.painPoints),
+      competitorWeaknesses: bucketCounts(input.competitorWeaknesses),
+      emergingGaps: bucketCounts(input.emergingGaps),
+    })
+    const prompt = fillTemplate(template, { query, themes: JSON.stringify(input) })
+    const messages: LLMMessage[] = [{ role: 'user', content: prompt }]
+
+    try {
+      return finishSynthesis(await callLLM(messages, { maxTokens: SYNTHESIS_MAX_TOKENS, temperature: 0.2 }))
+    } catch (firstError) {
+      const failure = describeLLMResponseError(firstError)
+      if (failure?.reason !== 'length') return failSynthesis(firstError, SYNTHESIS_MAX_TOKENS)
+
+      logger.warn('Report synthesis truncated; retrying with a larger token limit', {
+        event: 'synthesis_reply_length_truncated',
+        ...failure,
+        maxTokens: SYNTHESIS_MAX_TOKENS,
+        retryMaxTokens: SYNTHESIS_RETRY_MAX_TOKENS,
+      })
+      try {
+        return finishSynthesis(await callLLM(messages, { maxTokens: SYNTHESIS_RETRY_MAX_TOKENS, temperature: 0.2 }))
+      } catch (retryError) {
+        return failSynthesis(retryError, SYNTHESIS_RETRY_MAX_TOKENS)
+      }
+    }
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error : new Error(String(error)) }
+    return { ok: false, error: toError(error) }
   }
+}
+
+function bucketCounts(bucket: SynthesisBucket): { kept: number; longTail: number; excludedPositive: number } {
+  return { kept: bucket.themes.length, longTail: bucket.longTail.themes, excludedPositive: bucket.excludedPositive }
+}
+
+function finishSynthesis(value: string): Result<string> {
+  const missingSections = findMissingSections(value)
+  if (missingSections.length > 0) {
+    logger.warn('Synthesized report is missing sections', {
+      event: 'synthesis_incomplete',
+      missingSections,
+      reportLength: value.length,
+    })
+  }
+  return { ok: true, value }
 }
