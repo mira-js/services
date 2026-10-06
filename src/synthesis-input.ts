@@ -17,6 +17,8 @@ export type ThemeBuckets = {
 export type SynthesisSample = { analyzedItems: number; sourceCounts: Record<string, number> }
 
 export type SynthesisTheme = {
+  /** `<bucket prefix>-<index in the caller's original bucket array>`, e.g. `pp-3`. */
+  id: string
   name: string
   frequency: number
   sentiment: number
@@ -54,8 +56,11 @@ function themeQuotes(t: PainPointTheme): string[] {
   return [...new Set(quotes)]
 }
 
-function toSynthesisTheme(t: PainPointTheme): SynthesisTheme {
+export type SynthesisIdPrefix = 'pp' | 'cw' | 'eg'
+
+function toSynthesisTheme(t: PainPointTheme, id: string): SynthesisTheme {
   return {
+    id,
     name: themeName(t),
     frequency: t.frequency,
     sentiment: Math.round(t.sentiment * 100) / 100,
@@ -71,14 +76,24 @@ function countBySource(themes: PainPointTheme[]): Record<string, number> {
   }, {})
 }
 
-function selectBucket(themes: PainPointTheme[], dropPositive: boolean): SynthesisBucket {
-  const positive = dropPositive ? themes.filter((t) => t.sentiment > 0) : []
-  const candidates = dropPositive ? themes.filter((t) => t.sentiment <= 0) : themes
-  const recurring = candidates.filter((t) => t.frequency >= SYNTHESIS_MIN_FREQUENCY).sort((a, b) => b.frequency - a.frequency)
+type IndexedTheme = { theme: PainPointTheme; index: number }
+
+function selectBucket(themes: PainPointTheme[], dropPositive: boolean, prefix: SynthesisIdPrefix): SynthesisBucket {
+  // Keep each theme's original index so ids resolve against the caller's array
+  // even after filtering, re-sorting and capping.
+  const indexed: IndexedTheme[] = themes.map((theme, index) => ({ theme, index }))
+  const positive = dropPositive ? indexed.filter(({ theme }) => theme.sentiment > 0) : []
+  const candidates = dropPositive ? indexed.filter(({ theme }) => theme.sentiment <= 0) : indexed
+  const recurring = candidates
+    .filter(({ theme }) => theme.frequency >= SYNTHESIS_MIN_FREQUENCY)
+    .sort((a, b) => b.theme.frequency - a.theme.frequency)
   const kept = recurring.slice(0, SYNTHESIS_MAX_THEMES_PER_BUCKET)
-  const tail = [...recurring.slice(SYNTHESIS_MAX_THEMES_PER_BUCKET), ...candidates.filter((t) => t.frequency < SYNTHESIS_MIN_FREQUENCY)]
+  const tail = [
+    ...recurring.slice(SYNTHESIS_MAX_THEMES_PER_BUCKET),
+    ...candidates.filter(({ theme }) => theme.frequency < SYNTHESIS_MIN_FREQUENCY),
+  ].map(({ theme }) => theme)
   return {
-    themes: kept.map(toSynthesisTheme),
+    themes: kept.map(({ theme, index }) => toSynthesisTheme(theme, `${prefix}-${index}`)),
     longTail: {
       themes: tail.length,
       mentions: tail.reduce((sum, t) => sum + t.frequency, 0),
@@ -105,9 +120,9 @@ export function selectSynthesisInput(buckets: ThemeBuckets, sample?: SynthesisSa
     sample: sample
       ? { analyzedItems: sample.analyzedItems, sourceCounts: sample.sourceCounts, basis: 'items' }
       : { ...fallbackSample(buckets), basis: 'themes' },
-    painPoints: selectBucket(buckets.painPoints, true),
-    competitorWeaknesses: selectBucket(buckets.competitorWeaknesses, false),
-    emergingGaps: selectBucket(buckets.emergingGaps, false),
+    painPoints: selectBucket(buckets.painPoints, true, 'pp'),
+    competitorWeaknesses: selectBucket(buckets.competitorWeaknesses, false, 'cw'),
+    emergingGaps: selectBucket(buckets.emergingGaps, false, 'eg'),
   }
 }
 

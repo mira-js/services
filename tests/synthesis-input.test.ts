@@ -147,6 +147,30 @@ describe('selectSynthesisInput', () => {
     expect(input.competitorWeaknesses.themes.map((t) => t.name)).toEqual(['Top', 'Mid'])
     expect(input.sample).toEqual({ analyzedItems: 12, sourceCounts: { reddit: 8, hackernews: 4 }, basis: 'items' })
   })
+
+  it('[happy] each kept theme carries an id of bucket prefix plus its ORIGINAL index, even after filtering and re-sorting', () => {
+    const buckets = {
+      painPoints: [
+        theme({ theme: 'Loved thing', frequency: 5, sentiment: 0.8 }),
+        theme({ theme: 'Slow exports', frequency: 3 }),
+      ],
+      competitorWeaknesses: [theme({ theme: 'Mid', frequency: 3 }), theme({ theme: 'Top', frequency: 7 })],
+      emergingGaps: [theme({ theme: 'Gap', frequency: 2 })],
+    }
+    const before = structuredClone(buckets)
+
+    const input = selectSynthesisInput(buckets)
+
+    // The positive theme at index 0 is dropped, so the kept theme keeps index 1.
+    expect(input.painPoints.themes.map((t) => [t.name, t.id])).toEqual([['Slow exports', 'pp-1']])
+    // Re-sorted by frequency: Top (original index 1) now precedes Mid (original index 0).
+    expect(input.competitorWeaknesses.themes.map((t) => [t.name, t.id])).toEqual([
+      ['Top', 'cw-1'],
+      ['Mid', 'cw-0'],
+    ])
+    expect(input.emergingGaps.themes.map((t) => [t.name, t.id])).toEqual([['Gap', 'eg-0']])
+    expect(buckets).toEqual(before)
+  })
 })
 
 describe('findMissingSections', () => {

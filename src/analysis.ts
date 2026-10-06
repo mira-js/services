@@ -8,9 +8,12 @@ import { BatchError } from '@mira/shared-core'
 import { recordEmbeddingRequest } from '@mira/shared-core/usage-scope'
 import { logger } from '@mira/shared-core/logger'
 import { callLLM } from './llm.js'
-import type { LLMMessage } from './llm.js'
+import type { LLMMessage, LLMResponseFormat } from './llm.js'
 import { selectSynthesisInput, findMissingSections } from './synthesis-input.js'
-import type { ThemeBuckets, SynthesisSample, SynthesisBucket } from './synthesis-input.js'
+import { stripFences } from './strip-fences.js'
+import type { ThemeBuckets, SynthesisSample, SynthesisBucket, SynthesisInput } from './synthesis-input.js'
+import { parseSynthesisReply, renderReportMarkdown } from './synthesis-report.js'
+import type { SynthesisParseError, SynthesisReport } from './synthesis-report.js'
 import { debugRawEnabled } from './debug.js'
 import { mapWithConcurrency } from './concurrency.js'
 import { fetchWithRetryOn429 } from './jina-retry.js'
@@ -52,47 +55,7 @@ export function loadExtractionTemplate(): string {
   return loadPrompt('extract_pain_points.txt')
 }
 
-const BRACKET_PAIRS: ReadonlyArray<readonly [string, string]> = [['[', ']'], ['{', '}']]
-
-function isWrappedIn(text: string, opener: string, closer: string): boolean {
-  return text.startsWith(opener) && text.endsWith(closer)
-}
-
-/**
- * Reduces a raw LLM reply to the JSON text to parse. Pure and total.
- *
- * 1. Trim, then strip a leading ```` ```json ```` / ```` ``` ```` fence and a
- *    trailing ```` ``` ```` fence, then trim again.
- * 2. If the result already starts and ends with a matching `[`/`]` or `{`/`}`
- *    pair, return it.
- * 3. Otherwise fall back to the outermost bracket span: the opener is whichever
- *    of `[` / `{` appears first, the closer is the last index of its match. This
- *    drops prose before a fence or after the JSON, and keeps an object root
- *    whole even when it contains an array.
- * 4. With no such pair, return the unfenced text unchanged, so `JSON.parse`
- *    still fails on it and the caller tags it as a parse error.
- */
-export function stripFences(raw: string): string {
-  const unfenced = raw
-    .trim()
-    .replace(/^```(?:json)?[ \t]*\r?\n?/i, '')
-    .replace(/\r?\n?```$/i, '')
-    .trim()
-
-  if (BRACKET_PAIRS.some(([opener, closer]) => isWrappedIn(unfenced, opener, closer))) {
-    return unfenced
-  }
-
-  const candidates = BRACKET_PAIRS
-    .map(([opener, closer]) => ({ first: unfenced.indexOf(opener), closer }))
-    .filter(({ first }) => first !== -1)
-    .sort((a, b) => a.first - b.first)
-  const earliest = candidates[0]
-  if (!earliest) return unfenced
-
-  const last = unfenced.lastIndexOf(earliest.closer)
-  return last > earliest.first ? unfenced.slice(earliest.first, last + 1) : unfenced
-}
+export { stripFences }
 
 // ─── PL-2 Phase 0a diagnostic instrumentation (temporary, env-gated) ──────────
 // Gated behind MIRA_DEBUG_LLM_RAW because raw LLM bodies echo user-submitted
@@ -399,6 +362,47 @@ function failSynthesis(error: unknown, maxTokens: number): Result<string> {
   return { ok: false, error: toError(error) }
 }
 
+type SynthesisCallOptions = { temperature: number; responseFormat?: LLMResponseFormat }
+
+/**
+ * One synthesis call at the base budget, retried once at the larger budget when
+ * the reply was cut off by the token limit. Any other failure is returned as-is.
+ */
+async function callWithLengthRetry(messages: LLMMessage[], options: SynthesisCallOptions): Promise<Result<string>> {
+  try {
+    return { ok: true, value: await callLLM(messages, { maxTokens: SYNTHESIS_MAX_TOKENS, ...options }) }
+  } catch (firstError) {
+    const failure = describeLLMResponseError(firstError)
+    if (failure?.reason !== 'length') return failSynthesis(firstError, SYNTHESIS_MAX_TOKENS)
+
+    logger.warn('Report synthesis truncated; retrying with a larger token limit', {
+      event: 'synthesis_reply_length_truncated',
+      ...failure,
+      maxTokens: SYNTHESIS_MAX_TOKENS,
+      retryMaxTokens: SYNTHESIS_RETRY_MAX_TOKENS,
+    })
+    try {
+      return { ok: true, value: await callLLM(messages, { maxTokens: SYNTHESIS_RETRY_MAX_TOKENS, ...options }) }
+    } catch (retryError) {
+      return failSynthesis(retryError, SYNTHESIS_RETRY_MAX_TOKENS)
+    }
+  }
+}
+
+function logSynthesisInput(input: SynthesisInput): void {
+  logger.info('Synthesis input selected', {
+    event: 'synthesis_input',
+    sample: input.sample,
+    painPoints: bucketCounts(input.painPoints),
+    competitorWeaknesses: bucketCounts(input.competitorWeaknesses),
+    emergingGaps: bucketCounts(input.emergingGaps),
+  })
+}
+
+function buildSynthesisMessages(template: string, query: string, input: SynthesisInput): LLMMessage[] {
+  return [{ role: 'user', content: fillTemplate(template, { query, themes: JSON.stringify(input) }) }]
+}
+
 export async function synthesizeReport(
   query: string,
   themes: ThemeBuckets & { sample?: SynthesisSample },
@@ -406,34 +410,82 @@ export async function synthesizeReport(
   try {
     const template = loadPrompt('synthesize_report.txt')
     const input = selectSynthesisInput(themes, themes.sample)
-    logger.info('Synthesis input selected', {
-      event: 'synthesis_input',
-      sample: input.sample,
-      painPoints: bucketCounts(input.painPoints),
-      competitorWeaknesses: bucketCounts(input.competitorWeaknesses),
-      emergingGaps: bucketCounts(input.emergingGaps),
+    logSynthesisInput(input)
+    const reply = await callWithLengthRetry(buildSynthesisMessages(template, query, input), { temperature: 0.2 })
+    return reply.ok ? finishSynthesis(reply.value) : reply
+  } catch (error) {
+    return { ok: false, error: toError(error) }
+  }
+}
+
+const STRUCTURED_SYNTHESIS_PROMPT = 'synthesize_report_structured.txt'
+
+type StructuredSynthesis = { summary: string; report: SynthesisReport | null }
+type StructuredFallbackStage = 'prompt' | SynthesisParseError['kind']
+
+function tryLoadPrompt(filename: string): Result<string> {
+  try {
+    return { ok: true, value: loadPrompt(filename) }
+  } catch (error) {
+    return { ok: false, error: toError(error) }
+  }
+}
+
+async function fallbackToProse(
+  query: string,
+  themes: ThemeBuckets & { sample?: SynthesisSample },
+  stage: StructuredFallbackStage,
+  message: string,
+): Promise<Result<StructuredSynthesis>> {
+  logger.warn('Structured synthesis unusable; falling back to the prose report', {
+    event: 'synthesis_structured_fallback',
+    stage,
+    message,
+  })
+  const prose = await synthesizeReport(query, themes)
+  return prose.ok ? { ok: true, value: { summary: prose.value, report: null } } : prose
+}
+
+/**
+ * Synthesize the report as structured JSON (executive summary plus recommended
+ * actions citing input theme ids). `summary` is always the five-section
+ * markdown: rendered from the structured fields, or the prose report when the
+ * structured prompt is missing or its reply does not parse (`report: null`).
+ * LLM failures are returned as `ok:false` without a fallback call.
+ */
+export async function synthesizeStructuredReport(
+  query: string,
+  themes: ThemeBuckets & { sample?: SynthesisSample },
+): Promise<Result<StructuredSynthesis>> {
+  try {
+    const template = tryLoadPrompt(STRUCTURED_SYNTHESIS_PROMPT)
+    if (!template.ok) return await fallbackToProse(query, themes, 'prompt', template.error.message)
+
+    const input = selectSynthesisInput(themes, themes.sample)
+    logSynthesisInput(input)
+    const reply = await callWithLengthRetry(buildSynthesisMessages(template.value, query, input), {
+      temperature: 0.2,
+      responseFormat: 'json_object',
     })
-    const prompt = fillTemplate(template, { query, themes: JSON.stringify(input) })
-    const messages: LLMMessage[] = [{ role: 'user', content: prompt }]
+    if (!reply.ok) return reply
 
-    try {
-      return finishSynthesis(await callLLM(messages, { maxTokens: SYNTHESIS_MAX_TOKENS, temperature: 0.2 }))
-    } catch (firstError) {
-      const failure = describeLLMResponseError(firstError)
-      if (failure?.reason !== 'length') return failSynthesis(firstError, SYNTHESIS_MAX_TOKENS)
+    const parsed = parseSynthesisReply(reply.value, input)
+    if (!parsed.ok) return await fallbackToProse(query, themes, parsed.error.kind, parsed.error.message)
 
-      logger.warn('Report synthesis truncated; retrying with a larger token limit', {
-        event: 'synthesis_reply_length_truncated',
-        ...failure,
-        maxTokens: SYNTHESIS_MAX_TOKENS,
-        retryMaxTokens: SYNTHESIS_RETRY_MAX_TOKENS,
+    const { report, droppedIds } = parsed.value
+    if (droppedIds.length > 0) {
+      logger.warn('Structured synthesis cited unknown theme ids; dropped them', {
+        event: 'synthesis_theme_ids_dropped',
+        droppedIds,
       })
-      try {
-        return finishSynthesis(await callLLM(messages, { maxTokens: SYNTHESIS_RETRY_MAX_TOKENS, temperature: 0.2 }))
-      } catch (retryError) {
-        return failSynthesis(retryError, SYNTHESIS_RETRY_MAX_TOKENS)
-      }
     }
+    logger.info('Structured synthesis complete', {
+      event: 'synthesis_structured',
+      replyChars: reply.value.length,
+      actions: report.recommendedActions.length,
+      droppedIds: droppedIds.length,
+    })
+    return { ok: true, value: { summary: renderReportMarkdown(report, input), report } }
   } catch (error) {
     return { ok: false, error: toError(error) }
   }
