@@ -1,268 +1,143 @@
-# @mira/core-services
+<div align="center">
 
-[![npm](https://img.shields.io/npm/v/@mira/core-services)](https://www.npmjs.com/package/@mira/core-services)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
+# `@mira/core-services`
 
-Shared service implementations for the mira pipeline. This package contains the core business logic for job orchestration, LLM analysis, database operations, and Redis/OpenViking integration. Used by `@mira/api-core` and any custom implementations that need to reuse the pipeline logic.
+**From raw discussion to ranked themes.**
 
----
+LLM · extraction · clustering · report · queue · Postgres · OpenViking
+
+[![npm](https://img.shields.io/npm/v/@mira/core-services?style=flat-square&color=818cf8&labelColor=0e1320)](https://www.npmjs.com/package/@mira/core-services)
+[![license](https://img.shields.io/badge/license-AGPL--3.0-818cf8?style=flat-square&labelColor=0e1320)](./LICENSE)
+
+</div>
+
+<br>
+
+The service layer of Mira's open core. It turns collected items into structured pain points, clusters them into themes and writes a summary — plus the queue, LLM, database and memory-store plumbing around that work.
 
 ## Install
 
-```bash
+```sh
 npm install @mira/core-services
-# or
-pnpm add @mira/core-services
 ```
 
----
+## The analysis path
 
-## Exports
-
-### Orchestrator (`orchestrator`)
-
-BullMQ queue management for research jobs.
+```mermaid
+flowchart LR
+  items["CollectedItem[]"] --> extract["extractItem<br/>extractBatch"]
+  extract --> cluster["aggregateThemes"]
+  cluster --> report["synthesizeReport"]
+  report --> out["summary"]
+  classDef step fill:#0e1320,stroke:#2a3250,color:#c7cbe0
+  classDef edge fill:#818cf8,stroke:#a5b4fc,color:#0a0d1a
+  class extract,cluster,report step
+  class items,out edge
+```
 
 ```ts
-import { orchestrator } from '@mira/core-services'
+import { extractItem, aggregateThemes, synthesizeReport } from '@mira/core-services'
 
-// Enqueue a new research job
-const { id } = await orchestrator.enqueue({
-  query: 'CRM pain points',
-  depth: 'quick',
-  sources: ['reddit', 'hackernews']
-})
-
-// Get job status and result
-const job = await orchestrator.getJob(id)
-// Returns: { jobId, status, query, sources, depth, createdAt, result? }
-
-// List recent jobs
-const jobs = await orchestrator.listJobs()
-```
-
-### LLM Service (`callLLM`, `extractFromItem`)
-
-OpenAI-compatible LLM calls with structured output parsing.
-
-```ts
-import { callLLM, extractFromItem } from '@mira/core-services'
-
-// Raw LLM call with structured output
-const result = await callLLM({
-  systemPrompt: 'You are a helpful assistant.',
-  userPrompt: 'Extract pain points from this text...',
-  outputSchema: z.object({ pain_points: z.array(z.string()) })
-})
-
-// Extract structured data from a CollectedItem
-const extraction = await extractFromItem(item, query)
-// Returns: ExtractionResult { pain_points, sentiment, category, mentioned_tools, key_quote }
-```
-
-### Analysis Pipeline (`analyzeItems`)
-
-Full pipeline from raw items to synthesized research result.
-
-```ts
-import { analyzeItems } from '@mira/core-services'
-
-const result = await analyzeItems({
-  query: 'project management tools',
-  items: collectedItems, // CollectedItem[] from collectors
-  depth: 'quick'
-})
-// Returns: ResearchResult { summary, painPoints, competitorWeaknesses, emergingGaps, rawItems }
-```
-
-### Database (`db`)
-
-PostgreSQL client with typed queries for research jobs.
-
-```ts
-import { db } from '@mira/core-services'
-
-// Create a job record
-const job = await db.createJob({
-  jobId: 'abc123',
-  query: 'CRM pain points',
-  depth: 'quick',
-  sources: ['reddit', 'hackernews']
-})
-
-// Update job status
-await db.updateJobStatus('abc123', 'completed', result)
-
-// Get job by ID
-const job = await db.getJob('abc123')
-
-// List recent jobs
-const jobs = await db.listJobs({ limit: 50 })
-```
-
-### Redis (`redis`)
-
-Redis client with connection pooling and typed operations.
-
-```ts
-import { redis } from '@mira/core-services'
-
-// Set/get cached embeddings
-await redis.setEmbeddings('key', embeddings)
-const cached = await redis.getEmbeddings('key')
-
-// Cache LLM responses
-await redis.cacheLLMResponse('prompt-hash', response)
-const cached = await redis.getCachedLLMResponse('prompt-hash')
-```
-
-### OpenViking (`openviking`)
-
-OpenViking context store integration for semantic search and storage.
-
-```ts
-import { openviking } from '@mira/core-services'
-
-// Store collected items
-await openviking.ingestItems(items, { query, depth })
-
-// Search for relevant context
-const context = await openviking.findRelevantContext(query, { maxResults: 10 })
-
-// Get resource by URI
-const resource = await openviking.getResource('viking://resources/mira/items/abc123')
-```
-
-### Concurrency Utilities (`withConcurrency`)
-
-Parallel execution with configurable concurrency limits.
-
-```ts
-import { withConcurrency } from '@mira/core-services'
-
-// Process items in parallel with rate limiting
-const results = await withConcurrency(
-  items,
-  async (item) => await extractFromItem(item, query),
-  { concurrency: 5 }
-)
-```
-
----
-
-## Pipeline Flow
-
-The services work together to implement the full mira research pipeline:
-
-```
-1. Job Orchestration
-   └── orchestrator.enqueue() → BullMQ job
-
-2. Collection Phase
-   └── External collectors (@mira/core-collectors) → CollectedItem[]
-
-3. OpenViking Ingestion (optional)
-   └── openviking.ingestItems() → Store for future context
-
-4. LLM Extraction
-   └── withConcurrency(items, extractFromItem) → ExtractionResult[]
-
-5. Embedding & Clustering
-   └── getEmbeddings() + DBSCAN → Thematic clusters
-
-6. Synthesis
-   └── analyzeItems() → ResearchResult
-
-7. Job Completion
-   └── db.updateJobStatus() + orchestrator job completion
-```
-
----
-
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `LLM_API_KEY` | Yes | — | LLM provider API key |
-| `LLM_BASE_URL` | No | DeepSeek | Any OpenAI-compatible base URL |
-| `LLM_MODEL` | No | `deepseek-flash` | Model to use for extraction and synthesis |
-| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
-| `REDIS_URL` | Yes | — | Redis connection string |
-| `JINA_API_KEY` | No | — | Required for embeddings and clustering |
-| `OPENVIKING_URL` | No | — | OpenViking base URL (optional) |
-| `OPENVIKING_API_KEY` | No | — | OpenViking API key (optional) |
-| `mira_PROMPTS_DIR` | No | `../../prompts` | Directory for custom prompt overrides |
-| `mira_EXTRACTION_CONCURRENCY` | No | `5` | Parallel LLM calls during extraction |
-| `mira_OPENVIKING_INGEST_CONCURRENCY` | No | `10` | Parallel writes to OpenViking |
-
----
-
-## Error Handling
-
-All service functions return `Result<T, Error>` types (from `@mira/shared-core`) instead of throwing exceptions. This enables railway-oriented programming patterns:
-
-```ts
-import type { Result } from '@mira/shared-core'
-import { analyzeItems } from '@mira/core-services'
-
-const result: Result<ResearchResult> = await analyzeItems({ query, items, depth })
-
-if (result.ok) {
-  console.log('Analysis succeeded:', result.value)
-} else {
-  console.error('Analysis failed:', result.error)
-  // Handle gracefully without try/catch
+const pairs = []
+for (const item of items) {
+  const r = await extractItem(item)
+  if (r.ok) pairs.push({ item, extraction: r.value })
 }
+
+const themes = await aggregateThemes(pairs)
+if (!themes.ok) throw themes.error
+
+const report = await synthesizeReport(query, {
+  painPoints: themes.value,
+  competitorWeaknesses: [],
+  emergingGaps: [],
+})
 ```
 
----
+> [!IMPORTANT]
+> **Bring your own prompts.** No prompt files ship in any public Mira repository. Put `extract_pain_points.txt` and `synthesize_report.txt` in a directory and point `MIRA_PROMPTS_DIR` at it.
 
-## Customization
+## What's inside
 
-### Prompt Overrides
+| Module | Exports | Fails by |
+|:--|:--|:--|
+| LLM | `callLLM`, `LLMResponseError`, `resolveLLMConfig` | throwing |
+| Analysis | `extractItem`, `extractBatch`, `aggregateThemes`, `synthesizeReport`, `stripFences` | `Result` |
+| Queue | `orchestrator` (`enqueue`, `getJob`, `listJobs`) | throwing |
+| Database | `query`, `closePool` | `Result` |
+| Cache | `readAnalysisCache`, `writeAnalysisCache`, key helpers | `Result` on write |
+| Memory | `openVikingClient` (`addResource`, `find`) | throwing |
+| Utility | `mapWithConcurrency` · the `usage-scope` recorder | — |
 
-Override any of the three pipeline prompts by setting `mira_PROMPTS_DIR`:
+**Design choices worth knowing**
 
-```bash
-mira_PROMPTS_DIR=/path/to/my-prompts
+- **Any OpenAI-compatible endpoint.** Provider-neutral by design.
+- **No silent garbage.** Empty, choiceless and truncated LLM replies are errors.
+- **One bad reply never sinks a batch.** Batch extraction tags failures per item.
+- **Embeddings optional.** Theme clustering uses Jina embeddings, or groups by identical key quote when skipped.
+- **Fails fast without Redis**, so callers can answer `503` instead of hanging.
+
+> [!WARNING]
+> The analysis cache needs an `llm_analysis_cache` table. No shipped migration creates it — create it yourself first.
+
+## Where it sits
+
+```mermaid
+flowchart LR
+  cli["cli"] -- HTTP --> api["api-core"]
+  cli -. types .-> shared["shared-core"]
+  api --> services["core-services"]
+  api --> collectors["core-collectors"]
+  services --> shared
+  collectors --> shared
+  classDef here fill:#818cf8,stroke:#a5b4fc,color:#0a0d1a
+  classDef pkg fill:#0e1320,stroke:#2a3250,color:#c7cbe0
+  class services here
+  class cli,api,shared,collectors pkg
 ```
 
-Required files:
-- `categorize_content.txt` — First-pass relevance classification
-- `extract_pain_points.txt` — Structured per-item extraction
-- `synthesize_report.txt` — Final cross-item synthesis
+<details>
+<summary><b>Configuration</b></summary>
 
-### LLM Provider
+<br>
 
-Use any OpenAI-compatible provider:
+| Variable | For |
+|:--|:--|
+| `LLM_API_KEY` · `LLM_BASE_URL` · `LLM_MODEL` | LLM provider |
+| `LLM_DISABLE_THINKING` | Force thinking mode on or off |
+| `JINA_API_KEY` | Embedding-based clustering |
+| `REDIS_URL` | Job queue |
+| `DATABASE_URL` | Postgres |
+| `MIRA_PROMPTS_DIR` | Your prompt files |
+| `MIRA_LLM_CACHE_TTL_DAYS` | Analysis cache lifetime |
+| `OPENVIKING_URL` · `OPENVIKING_API_KEY` | Memory store |
 
-```ts
-process.env.LLM_BASE_URL = 'https://api.groq.com/openai/v1'
-process.env.LLM_MODEL = 'llama-3.3-70b-versatile'
+Legacy `OPENAI_*` and `DEEPSEEK_*` names are still read, with a one-time warning.
+
+</details>
+
+<details>
+<summary><b>Build from source</b></summary>
+
+<br>
+
+Clone next to `shared` in a pnpm workspace, then:
+
+```sh
+pnpm install && pnpm build
 ```
 
-All three settings are resolved by `resolveLLMConfig()` (`src/llm-config.ts`, ADR-022). Values are trimmed, and an empty value counts as unset.
+</details>
 
-**Legacy names (deprecated, read for one release).** `OPENAI_API_KEY` and `DEEPSEEK_API_KEY` fall back for `LLM_API_KEY`, `OPENAI_BASE_URL` for `LLM_BASE_URL`, and `OPENAI_MODEL` then `DEEPSEEK_MODEL` for `LLM_MODEL`. The canonical name always wins, and reading a legacy name logs one deprecation warning per process.
+<br>
 
-### Concurrency Tuning
-
-Adjust parallelism for your infrastructure:
-
-```bash
-mira_EXTRACTION_CONCURRENCY=10        # More parallel LLM calls
-mira_OPENVIKING_INGEST_CONCURRENCY=5  # Slower OpenViking writes
-```
-
----
-
-## Security
-
-For details on reporting security vulnerabilities, see [SECURITY.md](https://github.com/mira-js/.github/blob/main/SECURITY.md) in the mira-js org repository, or use [private vulnerability reporting](https://github.com/mira-js/services/security/advisories/new) on this repository.
-
-## License
-
-AGPL-3.0-only — see [LICENSE](./LICENSE).
-Contributions require signing the [CLA](https://github.com/mira-js/.github/blob/main/CLA.md) — see [CONTRIBUTING.md](https://github.com/mira-js/.github/blob/main/CONTRIBUTING.md).
-
+<div align="center">
+<sub>
+Part of <a href="https://github.com/mira-js">Mira's open core</a> ·
+<a href="./LICENSE">AGPL-3.0-only</a> ·
+<a href="https://github.com/mira-js/.github/blob/main/CONTRIBUTING.md">Contributing</a> (<a href="https://github.com/mira-js/.github/blob/main/CLA.md">CLA</a>) ·
+<a href="https://github.com/mira-js/services/security/advisories/new">Report a vulnerability</a>
+<br>
 Copyright (C) 2026 Fernando Nieto Pallares
+</sub>
+</div>
