@@ -75,7 +75,7 @@ const report = await synthesizeReport(query, {
 - **No silent garbage.** Empty, choiceless and truncated LLM replies are errors.
 - **One bad reply never sinks a batch.** Batch extraction tags failures per item.
 - **Embeddings optional.** Theme clustering uses Jina embeddings, or groups by identical key quote when skipped.
-- **Fails fast without Redis**, so callers can answer `503` instead of hanging.
+- **Fails fast without Redis**, so callers can answer `503` instead of hanging. `enqueue`, `getJob` and `listJobs` reject with `Queue unavailable` when Redis is unreachable or does not answer within `MIRA_QUEUE_TIMEOUT_MS`.
 
 > [!WARNING]
 > The analysis cache needs an `llm_analysis_cache` table. No shipped migration creates it — create it yourself first.
@@ -107,6 +107,7 @@ flowchart LR
 | `LLM_DISABLE_THINKING` | Force thinking mode on or off |
 | `JINA_API_KEY` | Embedding-based clustering |
 | `REDIS_URL` | Job queue |
+| `MIRA_QUEUE_TIMEOUT_MS` | Queue call timeout before rejecting (default `5000`) |
 | `DATABASE_URL` | Postgres |
 | `MIRA_PROMPTS_DIR` | Your prompt files |
 | `MIRA_LLM_CACHE_TTL_DAYS` | Analysis cache lifetime |

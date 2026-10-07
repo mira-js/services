@@ -11,6 +11,11 @@ vi.mock('bullmq', () => ({
   Worker: vi.fn(),
 }))
 
+vi.mock('ioredis', () => {
+  const Redis = vi.fn().mockImplementation(() => ({ status: 'ready', on: vi.fn() }))
+  return { Redis, default: Redis }
+})
+
 import { orchestrator } from '../src/orchestrator'
 
 beforeEach(() => {
