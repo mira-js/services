@@ -25,7 +25,12 @@ import { resolveLLMConfig } from './llm-config.js'
  */
 export const CACHE_KEY_VERSION = 'v1'
 
-export type AnalysisCacheKind = 'categorize' | 'extract'
+/**
+ * Adding a kind needs no `CACHE_KEY_VERSION` bump: `kind` is a key element, so
+ * keys of a new kind (`'label'`, item 183) cannot collide with existing keys,
+ * and no existing key or value changes.
+ */
+export type AnalysisCacheKind = 'categorize' | 'extract' | 'label'
 
 const DEFAULT_TTL_DAYS = 30
 
@@ -133,7 +138,7 @@ export interface AnalysisCacheWriteRow {
  * value would round — `0.5` would round to 0 and write rows that are already
  * expired, a permanent-miss cache in which both the read and the write succeed.
  */
-function resolveTtlDays(ttlDays?: number): number {
+export function resolveCacheTtlDays(ttlDays?: number): number {
   if (typeof ttlDays === 'number' && Number.isInteger(ttlDays) && ttlDays >= 1) return ttlDays
   const raw = process.env.MIRA_LLM_CACHE_TTL_DAYS?.trim()
   if (!raw) return DEFAULT_TTL_DAYS
@@ -163,7 +168,7 @@ export async function writeAnalysisCache(
     params.push(row.cacheKey, row.kind, row.promptVersion, row.model, JSON.stringify(row.result))
     return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}::jsonb, now() + ($${unique.length * 5 + 1}::int * INTERVAL '1 day'))`
   })
-  params.push(resolveTtlDays(ttlDays))
+  params.push(resolveCacheTtlDays(ttlDays))
 
   const res = await query<AnalysisCacheRowShape>(
     `INSERT INTO llm_analysis_cache (cache_key, kind, prompt_version, model, result, expires_at)

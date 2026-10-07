@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { z } from 'zod'
-import { readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { CollectedItem, ExtractionResult, PainPointTheme, Result } from '@mira/shared-core'
 import { BatchError } from '@mira/shared-core'
-import { recordEmbeddingRequest } from '@mira/shared-core/usage-scope'
 import { logger } from '@mira/shared-core/logger'
 import { callLLM } from './llm.js'
 import type { LLMMessage, LLMResponseFormat } from './llm.js'
@@ -15,8 +11,10 @@ import type { ThemeBuckets, SynthesisSample, SynthesisBucket, SynthesisInput } f
 import { parseSynthesisReply, renderReportMarkdown } from './synthesis-report.js'
 import type { SynthesisParseError, SynthesisReport } from './synthesis-report.js'
 import { debugRawEnabled } from './debug.js'
-import { mapWithConcurrency } from './concurrency.js'
-import { fetchWithRetryOn429 } from './jina-retry.js'
+import { loadPrompt, fillTemplate } from './prompt-files.js'
+import { getEmbeddings } from './embeddings.js'
+import { labelClusters } from './theme-labels.js'
+import type { ThemeCacheOptions } from './theme-labels.js'
 import type { LLMUsageSink } from './llm-usage.js'
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
@@ -30,22 +28,6 @@ export const ExtractionResultSchema = z.object({
 })
 
 const BatchExtractionResultSchema = z.array(ExtractionResultSchema)
-
-const JinaResponseSchema = z.object({
-  data: z.array(z.object({ index: z.number(), embedding: z.array(z.number()) })),
-})
-
-// ─── Prompt helpers ───────────────────────────────────────────────────────────
-
-const PROMPTS_DIR = process.env.MIRA_PROMPTS_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '../../../../prompts')
-
-function loadPrompt(filename: string): string {
-  return readFileSync(join(PROMPTS_DIR, filename), 'utf8')
-}
-
-function fillTemplate(template: string, vars: Record<string, string>): string {
-  return Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{{${k}}}`, v), template)
-}
 
 /**
  * The exact template string `extractBatch` fills, so a caller can hash the same
@@ -73,47 +55,6 @@ if (debugRawEnabled()) {
     module: 'mira-core/packages/core-services/analysis.ts',
     resolvedFrom: 'dist',
   })
-}
-
-// ─── Jina embeddings ──────────────────────────────────────────────────────────
-
-// Wraps a network-level fetch throw so the message carries the underlying
-// cause (for example ECONNRESET). The request/response body is never included.
-async function fetchEmbeddings(apiKey: string, texts: string[]): Promise<Response> {
-  try {
-    return await fetch('https://api.jina.ai/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'jina-embeddings-v4',
-        task: 'text-matching',
-        input: texts,
-      }),
-    })
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error)
-    const causeMsg = error instanceof Error && error.cause instanceof Error ? error.cause.message : ''
-    throw new Error(`Jina embeddings request failed: ${msg}${causeMsg ? ` (cause: ${causeMsg})` : ''}`)
-  }
-}
-
-async function getEmbeddings(texts: string[]): Promise<number[][]> {
-  const apiKey = process.env.JINA_API_KEY
-  if (!apiKey) {
-    throw new Error('JINA_API_KEY is required for embeddings')
-  }
-  const res = await fetchWithRetryOn429(() => fetchEmbeddings(apiKey, texts))
-  if (!res.ok) {
-    throw new Error(`Jina embeddings failed: ${res.status} ${res.statusText}`)
-  }
-  recordEmbeddingRequest()
-  const parsed = JinaResponseSchema.parse(await res.json())
-  return parsed.data
-    .sort((a, b) => a.index - b.index)
-    .map((d) => d.embedding)
 }
 
 // ─── Clustering helpers ───────────────────────────────────────────────────────
@@ -153,43 +94,6 @@ function greedyCluster<T>(items: T[], embeddings: number[][], threshold: number)
   )
 
   return clusters
-}
-
-// ─── Theme synthesis ──────────────────────────────────────────────────────────
-
-async function synthesizeThemeLabel(
-  cluster: ExtractionPair[],
-  onUsage?: LLMUsageSink,
-): Promise<Result<string>> {
-  const bullets = cluster
-    .slice(0, 5)
-    .map((p) => '- ' + (p.extraction.pain_points[0] ?? p.extraction.key_quote))
-    .join('\n')
-
-  const prompt =
-    'You are labelling a cluster of related user pain points.\n' +
-    'Write a 3–6 word label in Title Case that captures the shared theme.\n' +
-    'Return ONLY the label — no quotes, no trailing punctuation, no commentary.\n\n' +
-    'Pain points:\n' + bullets
-
-  // A rejected label call must not escape: it would reject the whole bucket.
-  const rawResult = await callLLM(
-    [{ role: 'user', content: prompt }],
-    { maxTokens: 32, temperature: 0, ...(onUsage ? { onUsage } : {}) },
-  ).then(
-    (value): Result<string> => ({ ok: true, value }),
-    (error: unknown): Result<string> => ({
-      ok: false,
-      error: error instanceof Error ? error : new Error(String(error)),
-    }),
-  )
-  if (!rawResult.ok) return rawResult
-
-  const cleaned = rawResult.value.trim().replace(/^["'`]+|["'`.!?]+$/g, '').trim()
-  if (!cleaned) {
-    return { ok: false, error: new Error('Empty label from LLM') }
-  }
-  return { ok: true, value: cleaned }
 }
 
 // ─── Exported functions ───────────────────────────────────────────────────────
@@ -276,11 +180,6 @@ export async function extractItem(item: CollectedItem): Promise<Result<Extractio
 
 type ExtractionPair = { item: CollectedItem; extraction: ExtractionResult }
 
-// Upper bound on in-flight label-synthesis LLM calls per aggregateThemes call.
-// String-dedup clustering yields roughly one cluster per item, so an unbounded
-// fan-out would fire one concurrent call per item.
-const LABEL_CONCURRENCY = 5
-
 function clusterByStringDedup(pairs: ExtractionPair[]): ExtractionPair[][] {
   const seen = pairs.reduce<Map<string, ExtractionPair[]>>((acc, pair) => {
     const key = pair.extraction.key_quote
@@ -289,9 +188,11 @@ function clusterByStringDedup(pairs: ExtractionPair[]): ExtractionPair[][] {
   return Array.from(seen.values())
 }
 
+export { type ThemeCacheOptions } from './theme-labels.js'
+
 export async function aggregateThemes(
   pairs: ExtractionPair[],
-  options?: { skipEmbeddings?: boolean; onUsage?: LLMUsageSink },
+  options?: { skipEmbeddings?: boolean; onUsage?: LLMUsageSink; cache?: ThemeCacheOptions },
 ): Promise<Result<PainPointTheme[]>> {
   try {
     if (pairs.length === 0) return { ok: true, value: [] }
@@ -302,21 +203,25 @@ export async function aggregateThemes(
           pairs,
           await getEmbeddings(
             pairs.map((p) => p.extraction.pain_points.join(' ') + ' ' + p.extraction.key_quote),
+            options?.cache,
           ),
           0.75,
         )
 
-    const built = await mapWithConcurrency(clusters, LABEL_CONCURRENCY, async (cluster) => {
+    const labels = await labelClusters(clusters, {
+      ...(options?.onUsage ? { onUsage: options.onUsage } : {}),
+      ...(options?.cache ? { cache: options.cache } : {}),
+    })
+
+    const built = clusters.map((cluster, i): PainPointTheme => {
       const avgSentiment =
         cluster.reduce((sum, p) => sum + Math.max(-1, Math.min(1, p.extraction.sentiment)), 0) /
         cluster.length
 
-      const rawTheme = cluster[0].extraction.key_quote
-      const labelResult = await synthesizeThemeLabel(cluster, options?.onUsage)
-      const synthesized_name = labelResult.ok ? labelResult.value : undefined
+      const synthesized_name = labels[i]
 
       return {
-        theme: rawTheme,
+        theme: cluster[0].extraction.key_quote,
         ...(synthesized_name ? { synthesized_name } : {}),
         frequency: cluster.length,
         sources: [...new Set(cluster.map((p) => p.item.source))],
@@ -326,7 +231,7 @@ export async function aggregateThemes(
           url: p.item.url,
           excerpt: p.extraction.key_quote,
         })),
-      } satisfies PainPointTheme
+      }
     })
 
     return {

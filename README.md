@@ -55,7 +55,7 @@ const report = await synthesizeReport(query, {
 ```
 
 > [!IMPORTANT]
-> **Bring your own prompts.** No prompt files ship in any public Mira repository. Put `extract_pain_points.txt` and `synthesize_report.txt` in a directory and point `MIRA_PROMPTS_DIR` at it.
+> **Bring your own prompts.** The analysis prompts do not ship in any public Mira repository. Put `extract_pain_points.txt` and `synthesize_report.txt` in a directory and point `MIRA_PROMPTS_DIR` at it. The one exception is `theme_label.txt`: a default ships bundled in `mira-core/prompts/` and is used when the file is absent from that directory.
 
 ## What's inside
 
