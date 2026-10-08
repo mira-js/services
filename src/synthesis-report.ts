@@ -2,6 +2,7 @@
 import { z } from 'zod'
 import type { Result } from '@mira/shared-core'
 import { stripFences } from './strip-fences.js'
+import { scrubInternalRefs } from './synthesis-prose-guard.js'
 import type { SynthesisBucket, SynthesisIdPrefix, SynthesisInput, SynthesisTheme } from './synthesis-input.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -96,12 +97,13 @@ function parseJson(text: string): Result<unknown, SynthesisParseError> {
 /**
  * Parse a structured synthesis reply into a `SynthesisReport`. Cited ids are
  * resolved against the ids present in `input`; an unknown id is dropped into
- * `droppedIds` rather than failing the parse. Pure.
+ * `droppedIds` rather than failing the parse. Theme ids and score fragments the
+ * model leaked into prose are stripped (counted in `scrubbedRefs`). Pure.
  */
 export function parseSynthesisReply(
   raw: string,
   input: SynthesisInput,
-): Result<{ report: SynthesisReport; droppedIds: string[] }, SynthesisParseError> {
+): Result<{ report: SynthesisReport; droppedIds: string[]; scrubbedRefs: number }, SynthesisParseError> {
   const json = parseJson(stripFences(raw))
   if (!json.ok) return json
 
@@ -110,6 +112,13 @@ export function parseSynthesisReply(
 
   const known = inputThemesByKey(input)
   const droppedIds: string[] = []
+  let scrubbedRefs = 0
+  const scrub = (text: string): string => {
+    const result = scrubInternalRefs(text)
+    scrubbedRefs += result.removed
+    return result.text
+  }
+  const executiveSummary = scrub(parsed.data.executive_summary)
   const recommendedActions = parsed.data.recommended_actions.map((entry): RecommendedAction => {
     const seen = new Set<string>()
     const themes = entry.theme_ids.flatMap((id): ThemeRef[] => {
@@ -122,12 +131,12 @@ export function parseSynthesisReply(
       seen.add(refKey(ref))
       return [ref]
     })
-    return { action: entry.action, rationale: entry.rationale, themes }
+    return { action: scrub(entry.action), rationale: scrub(entry.rationale), themes }
   })
 
   return {
     ok: true,
-    value: { report: { executiveSummary: parsed.data.executive_summary, recommendedActions }, droppedIds },
+    value: { report: { executiveSummary, recommendedActions }, droppedIds, scrubbedRefs },
   }
 }
 

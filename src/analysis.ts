@@ -377,11 +377,17 @@ export async function synthesizeStructuredReport(
     const parsed = parseSynthesisReply(reply.value, input)
     if (!parsed.ok) return await fallbackToProse(query, themes, parsed.error.kind, parsed.error.message)
 
-    const { report, droppedIds } = parsed.value
+    const { report, droppedIds, scrubbedRefs } = parsed.value
     if (droppedIds.length > 0) {
       logger.warn('Structured synthesis cited unknown theme ids; dropped them', {
         event: 'synthesis_theme_ids_dropped',
         droppedIds,
+      })
+    }
+    if (scrubbedRefs > 0) {
+      logger.warn('Structured synthesis prose cited internal theme refs; stripped them', {
+        event: 'synthesis_prose_scrubbed',
+        removed: scrubbedRefs,
       })
     }
     logger.info('Structured synthesis complete', {
@@ -389,6 +395,7 @@ export async function synthesizeStructuredReport(
       replyChars: reply.value.length,
       actions: report.recommendedActions.length,
       droppedIds: droppedIds.length,
+      scrubbedRefs,
     })
     return { ok: true, value: { summary: renderReportMarkdown(report, input), report } }
   } catch (error) {

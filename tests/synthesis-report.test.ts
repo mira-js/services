@@ -99,6 +99,44 @@ describe('parseSynthesisReply', () => {
       ],
     })
   })
+  it('[unhappy] scrubs theme ids and score fragments from the summary and rationale while theme_ids still resolve', () => {
+    const raw = reply({
+      executive_summary: 'Sample of 12 items. Exports dominate (pp-1, frequency 4, sentiment -0.6).',
+      recommended_actions: [
+        { action: 'Fix export speed', rationale: 'Most frequent complaint pp-1 (-0.6).', theme_ids: ['pp-1'] },
+      ],
+    })
+
+    const result = parseSynthesisReply(raw, makeInput())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.report.executiveSummary).toBe('Sample of 12 items. Exports dominate.')
+    expect(result.value.report.recommendedActions[0]?.rationale).toBe('Most frequent complaint.')
+    expect(result.value.report.recommendedActions[0]?.themes).toEqual([{ bucket: 'painPoints', index: 1 }])
+    expect(result.value.scrubbedRefs).toBe(3)
+    expect(result.value.droppedIds).toEqual([])
+  })
+
+  // ─── happy ──────────────────────────────────────────────────────────────────
+
+  it('[happy] a clean reply reports scrubbedRefs 0 and an unchanged report', () => {
+    const result = parseSynthesisReply(reply(), makeInput())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.scrubbedRefs).toBe(0)
+    expect(result.value.report).toEqual({
+      executiveSummary: 'Sample of 12 items from reddit and hackernews. Exports are the main complaint.',
+      recommendedActions: [
+        {
+          action: 'Fix export speed',
+          rationale: 'Most frequent complaint.',
+          themes: [{ bucket: 'painPoints', index: 1 }],
+        },
+      ],
+    })
+  })
 })
 
 describe('renderReportMarkdown', () => {

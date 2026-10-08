@@ -25,6 +25,7 @@ vi.stubGlobal('fetch', vi.fn())
 import { synthesizeStructuredReport } from '../src/analysis.js'
 import { LLMResponseError } from '../src/llm.js'
 import { selectSynthesisInput, findMissingSections } from '../src/synthesis-input.js'
+import type { SynthesisReport } from '../src/synthesis-report.js'
 
 const STRUCTURED_TEMPLATE = 'STRUCTURED Q={{query}} T={{themes}} Return only json.'
 const PROSE_TEMPLATE = 'PROSE Q={{query}} T={{themes}}'
@@ -180,7 +181,44 @@ describe('synthesizeStructuredReport', () => {
     expect(mockCallLLM.mock.calls[1]?.[0]).toEqual(mockCallLLM.mock.calls[0]?.[0])
   })
 
+  it('[unhappy] a reply citing pp-0 with scores in prose is scrubbed from report and summary, logged, and still resolves themes', async () => {
+    const leakyReply = JSON.stringify({
+      executive_summary: 'Sample of 4 items from reddit. Exports are slow (pp-0, frequency 4, sentiment -0.6).',
+      recommended_actions: [
+        { action: 'Fix exports', rationale: 'Most frequent complaint pp-0 (-0.6).', theme_ids: ['pp-0'] },
+      ],
+    })
+    mockCallLLM.mockResolvedValueOnce(leakyReply)
+
+    const result = await synthesizeStructuredReport('exports', makeThemes())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const idPattern = /\b(pp|cw|eg)-\d+\b/
+    expect(result.value.report).not.toBeNull()
+    expect(result.value.report?.executiveSummary).not.toMatch(idPattern)
+    expect(result.value.report?.recommendedActions[0]?.rationale).not.toMatch(idPattern)
+    expect(result.value.summary).not.toMatch(idPattern)
+    expect(result.value.report?.recommendedActions[0]?.themes).toEqual([{ bucket: 'painPoints', index: 0 }])
+
+    const warnLog = findLogContext(mockWarn, 'synthesis_prose_scrubbed')
+    expect(warnLog).toBeDefined()
+    const removed = warnLog?.removed
+    expect(typeof removed === 'number' && removed > 0).toBe(true)
+    const infoLog = findLogContext(mockInfo, 'synthesis_structured')
+    expect(infoLog?.scrubbedRefs).toBe(removed)
+  })
+
   // ─── happy ──────────────────────────────────────────────────────────────────
+
+  it('[happy] VALID_REPLY emits no synthesis_prose_scrubbed warn (expect: green)', async () => {
+    mockCallLLM.mockResolvedValueOnce(VALID_REPLY)
+
+    const result = await synthesizeStructuredReport('exports', makeThemes())
+
+    expect(result.ok).toBe(true)
+    expect(findLogContext(mockWarn, 'synthesis_prose_scrubbed')).toBeUndefined()
+  })
 
   it('[happy] a valid JSON reply makes one json_object call and returns the rendered markdown summary with the report', async () => {
     // Imported here so a missing new module fails only this case, not the whole file.
@@ -190,7 +228,7 @@ describe('synthesizeStructuredReport', () => {
 
     const result = await synthesizeStructuredReport('exports', themes)
 
-    const expectedReport = {
+    const expectedReport: SynthesisReport = {
       executiveSummary: 'Sample of 4 items from reddit. Exports are slow.',
       recommendedActions: [
         {
