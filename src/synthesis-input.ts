@@ -2,6 +2,11 @@
 import type { PainPointTheme } from '@mira/shared-core'
 
 export const SYNTHESIS_MIN_FREQUENCY = 2
+/**
+ * Themes with `sentiment >= SYNTHESIS_NEUTRAL_BAND` are excluded as praise from
+ * every bucket. Near-neutral and negative themes are kept.
+ */
+export const SYNTHESIS_NEUTRAL_BAND = 0.15
 export const SYNTHESIS_MAX_THEMES_PER_BUCKET = 10
 export const SYNTHESIS_MAX_QUOTES_PER_THEME = 2
 export const SYNTHESIS_MAX_QUOTE_CHARS = 200
@@ -78,12 +83,12 @@ function countBySource(themes: PainPointTheme[]): Record<string, number> {
 
 type IndexedTheme = { theme: PainPointTheme; index: number }
 
-function selectBucket(themes: PainPointTheme[], dropPositive: boolean, prefix: SynthesisIdPrefix): SynthesisBucket {
+function selectBucket(themes: PainPointTheme[], prefix: SynthesisIdPrefix): SynthesisBucket {
   // Keep each theme's original index so ids resolve against the caller's array
   // even after filtering, re-sorting and capping.
   const indexed: IndexedTheme[] = themes.map((theme, index) => ({ theme, index }))
-  const positive = dropPositive ? indexed.filter(({ theme }) => theme.sentiment > 0) : []
-  const candidates = dropPositive ? indexed.filter(({ theme }) => theme.sentiment <= 0) : indexed
+  const positive = indexed.filter(({ theme }) => theme.sentiment >= SYNTHESIS_NEUTRAL_BAND)
+  const candidates = indexed.filter(({ theme }) => theme.sentiment < SYNTHESIS_NEUTRAL_BAND)
   const recurring = candidates
     .filter(({ theme }) => theme.frequency >= SYNTHESIS_MIN_FREQUENCY)
     .sort((a, b) => b.theme.frequency - a.theme.frequency)
@@ -120,9 +125,9 @@ export function selectSynthesisInput(buckets: ThemeBuckets, sample?: SynthesisSa
     sample: sample
       ? { analyzedItems: sample.analyzedItems, sourceCounts: sample.sourceCounts, basis: 'items' }
       : { ...fallbackSample(buckets), basis: 'themes' },
-    painPoints: selectBucket(buckets.painPoints, true, 'pp'),
-    competitorWeaknesses: selectBucket(buckets.competitorWeaknesses, false, 'cw'),
-    emergingGaps: selectBucket(buckets.emergingGaps, false, 'eg'),
+    painPoints: selectBucket(buckets.painPoints, 'pp'),
+    competitorWeaknesses: selectBucket(buckets.competitorWeaknesses, 'cw'),
+    emergingGaps: selectBucket(buckets.emergingGaps, 'eg'),
   }
 }
 

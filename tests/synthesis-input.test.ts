@@ -17,30 +17,66 @@ const emptyBuckets = () => ({ painPoints: [], competitorWeaknesses: [], emerging
 describe('selectSynthesisInput', () => {
   // ─── unhappy ────────────────────────────────────────────────────────────────
 
-  it('[unhappy] excludes positive pain-point themes and counts them in excludedPositive, not longTail', () => {
-    const buckets = {
+  it('[unhappy] excludes a clearly positive competitorWeaknesses theme and counts it in excludedPositive, not longTail', () => {
+    const input = selectSynthesisInput({
       ...emptyBuckets(),
       painPoints: [
         theme({ theme: 'Loved thing A', frequency: 5, sentiment: 0.5 }),
-        theme({ theme: 'Loved thing B', frequency: 5, sentiment: 0.9 }),
         theme({ theme: 'Slow exports', frequency: 3, sentiment: -0.6 }),
       ],
       competitorWeaknesses: [theme({ theme: 'Praised plugin system', frequency: 4, sentiment: 0.7 })],
-    }
+    })
 
-    const input = selectSynthesisInput(buckets)
+    expect(input.competitorWeaknesses.themes).toEqual([])
+    expect(input.competitorWeaknesses.excludedPositive).toBe(1)
+    expect(input.competitorWeaknesses.longTail.themes).toBe(0)
+    expect(input.competitorWeaknesses.longTail.mentions).toBe(0)
+
+    // Pain-point behaviour is unchanged.
+    expect(input.painPoints.themes.map((t) => t.name)).toEqual(['Slow exports'])
+    expect(input.painPoints.excludedPositive).toBe(1)
+  })
+
+  it('[unhappy] excludes a clearly positive emergingGaps theme and counts it per bucket; a negative gap theme is kept', () => {
+    const input = selectSynthesisInput({
+      ...emptyBuckets(),
+      emergingGaps: [
+        theme({ theme: 'Loved gap', frequency: 3, sentiment: 0.47 }),
+        theme({ theme: 'Missing export', frequency: 2, sentiment: -0.3 }),
+      ],
+    })
+
+    expect(input.emergingGaps.themes.map((t) => t.name)).toEqual(['Missing export'])
+    expect(input.emergingGaps.excludedPositive).toBe(1)
+    expect(input.emergingGaps.longTail.themes).toBe(0)
+    expect(input.painPoints.excludedPositive).toBe(0)
+    expect(input.competitorWeaknesses.excludedPositive).toBe(0)
+  })
+
+  it('[unhappy] boundary: a pain theme at exactly 0.15 is excluded and one at 0.14 is kept', () => {
+    const input = selectSynthesisInput({
+      ...emptyBuckets(),
+      painPoints: [
+        theme({ theme: 'At the band', frequency: 4, sentiment: 0.15 }),
+        theme({ theme: 'Just under the band', frequency: 4, sentiment: 0.14 }),
+      ],
+    })
 
     const names = input.painPoints.themes.map((t) => t.name)
-    expect(names).toEqual(['Slow exports'])
-    expect(names).not.toContain('Loved thing A')
-    expect(names).not.toContain('Loved thing B')
-    expect(input.painPoints.excludedPositive).toBe(2)
+    expect(names).toContain('Just under the band')
+    expect(names).not.toContain('At the band')
+    expect(input.painPoints.excludedPositive).toBe(1)
     expect(input.painPoints.longTail.themes).toBe(0)
-    expect(input.painPoints.longTail.mentions).toBe(0)
+  })
 
-    // Other buckets keep positive themes.
-    expect(input.competitorWeaknesses.themes.map((t) => t.name)).toEqual(['Praised plugin system'])
-    expect(input.competitorWeaknesses.excludedPositive).toBe(0)
+  it('[unhappy] keeps a near-neutral +0.02 pain theme and does not count it in excludedPositive', () => {
+    const input = selectSynthesisInput({
+      ...emptyBuckets(),
+      painPoints: [theme({ theme: 'AI Code Review Burden', frequency: 5, sentiment: 0.02 })],
+    })
+
+    expect(input.painPoints.themes.map((t) => t.name)).toEqual(['AI Code Review Burden'])
+    expect(input.painPoints.excludedPositive).toBe(0)
   })
 
   it('[unhappy] caps a bucket at 10 themes by frequency and summarises the rest as longTail', () => {
@@ -126,7 +162,7 @@ describe('selectSynthesisInput', () => {
 
   // ─── happy ──────────────────────────────────────────────────────────────────
 
-  it('[happy] does not mutate or reorder the caller arrays and passes a given sample through with basis items', () => {
+  it('[happy] does not mutate or reorder the caller arrays and passes a given sample through with basis items (expect: green)', () => {
     const buckets = {
       painPoints: [
         theme({ theme: 'Low', frequency: 2 }),
@@ -148,7 +184,7 @@ describe('selectSynthesisInput', () => {
     expect(input.sample).toEqual({ analyzedItems: 12, sourceCounts: { reddit: 8, hackernews: 4 }, basis: 'items' })
   })
 
-  it('[happy] each kept theme carries an id of bucket prefix plus its ORIGINAL index, even after filtering and re-sorting', () => {
+  it('[happy] each kept theme carries an id of bucket prefix plus its ORIGINAL index, even after filtering and re-sorting (expect: green)', () => {
     const buckets = {
       painPoints: [
         theme({ theme: 'Loved thing', frequency: 5, sentiment: 0.8 }),
