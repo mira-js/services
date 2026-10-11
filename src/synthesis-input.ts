@@ -37,11 +37,16 @@ export type SynthesisBucket = {
   excludedPositive: number
 }
 
+/** Research-coverage facts the report must disclose (e.g. the product's own subreddit could not be searched). */
+export type SynthesisCoverage = { productCommunitiesDropped: string[] }
+
 export type SynthesisInput = {
   sample: SynthesisSample & { basis: 'items' | 'themes' }
   painPoints: SynthesisBucket
   competitorWeaknesses: SynthesisBucket
   emergingGaps: SynthesisBucket
+  /** Present only when there is something to disclose, so the input JSON is otherwise unchanged. */
+  coverage?: SynthesisCoverage
 }
 
 function truncate(text: string, max: number): string {
@@ -120,7 +125,12 @@ function fallbackSample(buckets: ThemeBuckets): SynthesisSample {
  * Reduce the aggregated theme buckets to the compact evidence the synthesis
  * prompt needs. Pure: the caller's arrays are never mutated or reordered.
  */
-export function selectSynthesisInput(buckets: ThemeBuckets, sample?: SynthesisSample): SynthesisInput {
+export function selectSynthesisInput(
+  buckets: ThemeBuckets,
+  sample?: SynthesisSample,
+  coverage?: SynthesisCoverage,
+): SynthesisInput {
+  const dropped = coverage?.productCommunitiesDropped ?? []
   return {
     sample: sample
       ? { analyzedItems: sample.analyzedItems, sourceCounts: sample.sourceCounts, basis: 'items' }
@@ -128,6 +138,7 @@ export function selectSynthesisInput(buckets: ThemeBuckets, sample?: SynthesisSa
     painPoints: selectBucket(buckets.painPoints, 'pp'),
     competitorWeaknesses: selectBucket(buckets.competitorWeaknesses, 'cw'),
     emergingGaps: selectBucket(buckets.emergingGaps, 'eg'),
+    ...(dropped.length > 0 ? { coverage: { productCommunitiesDropped: [...dropped] } } : {}),
   }
 }
 

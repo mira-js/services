@@ -7,7 +7,9 @@ import { callLLM } from './llm.js'
 import type { LLMMessage, LLMResponseFormat } from './llm.js'
 import { selectSynthesisInput, findMissingSections } from './synthesis-input.js'
 import { stripFences } from './strip-fences.js'
-import type { ThemeBuckets, SynthesisSample, SynthesisBucket, SynthesisInput } from './synthesis-input.js'
+import type { ThemeBuckets, SynthesisSample, SynthesisBucket, SynthesisInput, SynthesisCoverage } from './synthesis-input.js'
+
+type SynthesisThemes = ThemeBuckets & { sample?: SynthesisSample; coverage?: SynthesisCoverage }
 import { parseSynthesisReply, renderReportMarkdown } from './synthesis-report.js'
 import type { SynthesisParseError, SynthesisReport } from './synthesis-report.js'
 import { debugRawEnabled } from './debug.js'
@@ -301,6 +303,7 @@ function logSynthesisInput(input: SynthesisInput): void {
     painPoints: bucketCounts(input.painPoints),
     competitorWeaknesses: bucketCounts(input.competitorWeaknesses),
     emergingGaps: bucketCounts(input.emergingGaps),
+    ...(input.coverage ? { coverage: input.coverage } : {}),
   })
 }
 
@@ -310,11 +313,11 @@ function buildSynthesisMessages(template: string, query: string, input: Synthesi
 
 export async function synthesizeReport(
   query: string,
-  themes: ThemeBuckets & { sample?: SynthesisSample },
+  themes: SynthesisThemes,
 ): Promise<Result<string>> {
   try {
     const template = loadPrompt('synthesize_report.txt')
-    const input = selectSynthesisInput(themes, themes.sample)
+    const input = selectSynthesisInput(themes, themes.sample, themes.coverage)
     logSynthesisInput(input)
     const reply = await callWithLengthRetry(buildSynthesisMessages(template, query, input), { temperature: 0.2 })
     return reply.ok ? finishSynthesis(reply.value) : reply
@@ -338,7 +341,7 @@ function tryLoadPrompt(filename: string): Result<string> {
 
 async function fallbackToProse(
   query: string,
-  themes: ThemeBuckets & { sample?: SynthesisSample },
+  themes: SynthesisThemes,
   stage: StructuredFallbackStage,
   message: string,
 ): Promise<Result<StructuredSynthesis>> {
@@ -360,13 +363,13 @@ async function fallbackToProse(
  */
 export async function synthesizeStructuredReport(
   query: string,
-  themes: ThemeBuckets & { sample?: SynthesisSample },
+  themes: SynthesisThemes,
 ): Promise<Result<StructuredSynthesis>> {
   try {
     const template = tryLoadPrompt(STRUCTURED_SYNTHESIS_PROMPT)
     if (!template.ok) return await fallbackToProse(query, themes, 'prompt', template.error.message)
 
-    const input = selectSynthesisInput(themes, themes.sample)
+    const input = selectSynthesisInput(themes, themes.sample, themes.coverage)
     logSynthesisInput(input)
     const reply = await callWithLengthRetry(buildSynthesisMessages(template.value, query, input), {
       temperature: 0.2,
