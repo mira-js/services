@@ -8,6 +8,8 @@ export const SYNTHESIS_MIN_FREQUENCY = 2
  */
 export const SYNTHESIS_NEUTRAL_BAND = 0.15
 export const SYNTHESIS_MAX_THEMES_PER_BUCKET = 10
+/** Cap on `singleMentions`: leads offered to the brief when a bucket has no recurring theme. */
+export const SYNTHESIS_MAX_SINGLE_MENTIONS = 5
 export const SYNTHESIS_MAX_QUOTES_PER_THEME = 2
 export const SYNTHESIS_MAX_QUOTE_CHARS = 200
 export const SYNTHESIS_MAX_NAME_CHARS = 120
@@ -33,6 +35,13 @@ export type SynthesisTheme = {
 
 export type SynthesisBucket = {
   themes: SynthesisTheme[]
+  /**
+   * Present only when `themes` is empty and the bucket holds frequency-1,
+   * non-positive themes: up to `SYNTHESIS_MAX_SINGLE_MENTIONS` of them, most
+   * negative first (ties by original index). Absent otherwise, so the input JSON
+   * is unchanged for every bucket that has a recurring theme.
+   */
+  singleMentions?: SynthesisTheme[]
   longTail: { themes: number; mentions: number; themesBySource: Record<string, number> }
   excludedPositive: number
 }
@@ -102,8 +111,17 @@ function selectBucket(themes: PainPointTheme[], prefix: SynthesisIdPrefix): Synt
     ...recurring.slice(SYNTHESIS_MAX_THEMES_PER_BUCKET),
     ...candidates.filter(({ theme }) => theme.frequency < SYNTHESIS_MIN_FREQUENCY),
   ].map(({ theme }) => theme)
+  const singleMentions =
+    kept.length === 0
+      ? candidates
+          .filter(({ theme }) => theme.frequency < SYNTHESIS_MIN_FREQUENCY)
+          .sort((a, b) => a.theme.sentiment - b.theme.sentiment || a.index - b.index)
+          .slice(0, SYNTHESIS_MAX_SINGLE_MENTIONS)
+          .map(({ theme, index }) => toSynthesisTheme(theme, `${prefix}-${index}`))
+      : []
   return {
     themes: kept.map(({ theme, index }) => toSynthesisTheme(theme, `${prefix}-${index}`)),
+    ...(singleMentions.length > 0 ? { singleMentions } : {}),
     longTail: {
       themes: tail.length,
       mentions: tail.reduce((sum, t) => sum + t.frequency, 0),

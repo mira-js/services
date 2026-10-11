@@ -38,6 +38,23 @@ function reply(overrides: Record<string, unknown> = {}): string {
   })
 }
 
+function singleMention(id: string, name: string) {
+  return { id, name, frequency: 1, sentiment: -0.5, sources: ['reddit'], quotes: ['only said once'] }
+}
+
+// Extracts one rendered section (heading line up to the next ## heading).
+function section(markdown: string, heading: RegExp): string {
+  const start = markdown.search(heading)
+  const rest = markdown.slice(start)
+  const next = rest.slice(2).search(/^## /m)
+  return next === -1 ? rest : rest.slice(0, next + 2)
+}
+
+const emptyReport = {
+  executiveSummary: 'Sample of 12 items. Nothing recurs.',
+  recommendedActions: [{ action: 'Broaden the query', rationale: 'Nothing recurs.', themes: [] }],
+}
+
 describe('parseSynthesisReply', () => {
   // ─── unhappy ────────────────────────────────────────────────────────────────
 
@@ -118,6 +135,24 @@ describe('parseSynthesisReply', () => {
     expect(result.value.droppedIds).toEqual([])
   })
 
+  it('[unhappy] a cited single-mention id resolves to its bucket and original index with no dropped ids', () => {
+    const base = makeInput()
+    const input = {
+      ...base,
+      painPoints: { ...base.painPoints, singleMentions: [singleMention('pp-4', 'Awkward share flow')] },
+    }
+    const raw = reply({
+      recommended_actions: [{ action: 'Validate share flow', rationale: 'Came up once.', theme_ids: ['pp-4'] }],
+    })
+
+    const result = parseSynthesisReply(raw, input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.droppedIds).toEqual([])
+    expect(result.value.report.recommendedActions[0]?.themes).toEqual([{ bucket: 'painPoints', index: 4 }])
+  })
+
   // ─── happy ──────────────────────────────────────────────────────────────────
 
   it('[happy] a clean reply reports scrubbedRefs 0 and an unchanged report', () => {
@@ -140,7 +175,92 @@ describe('parseSynthesisReply', () => {
 })
 
 describe('renderReportMarkdown', () => {
+  // ─── unhappy ────────────────────────────────────────────────────────────────
+
+  it('[unhappy] an empty bucket without singleMentions renders "mentioned once" wording and never "long-tail"', () => {
+    const markdown = renderReportMarkdown(emptyReport, makeInput())
+
+    const gaps = section(markdown, /^## .*EMERGING GAPS/im)
+    expect(gaps).toContain('No recurring signal (3 topics mentioned once).')
+    expect(markdown).not.toContain('long-tail')
+    expect(markdown).not.toMatch(/long[- ]tail/i)
+    expect(markdown.match(/^## /gm)).toHaveLength(5)
+  })
+
   // ─── happy ──────────────────────────────────────────────────────────────────
+
+  it('[happy] painPoints singleMentions render a label line and one bullet each, keeping five ## headings', () => {
+    const input = {
+      ...makeInput(),
+      painPoints: {
+        themes: [],
+        singleMentions: [singleMention('pp-4', 'Awkward share flow'), singleMention('pp-7', 'Lost saved designs')],
+        longTail: { themes: 16, mentions: 16, themesBySource: { reddit: 16 } },
+        excludedPositive: 5,
+      },
+    }
+
+    const markdown = renderReportMarkdown(emptyReport, input)
+
+    const pain = section(markdown, /^## .*TOP PAIN POINTS/im)
+    expect(pain).toContain('**Single mentions, not yet a pattern** (top 2 of 16 mentioned once):')
+    expect(pain).toContain('- **Awkward share flow**')
+    expect(pain).toContain('- **Lost saved designs**')
+    expect(pain).not.toContain('No recurring signal')
+    expect(markdown.match(/^## /gm)).toHaveLength(5)
+    expect(findMissingSections(markdown)).toEqual([])
+    expect(markdown).not.toMatch(/long[- ]tail/i)
+  })
+
+  it('[happy] emergingGaps singleMentions with K equal to N omit "top"', () => {
+    const input = {
+      ...makeInput(),
+      emergingGaps: {
+        themes: [],
+        singleMentions: [singleMention('eg-2', 'Wants a public gallery')],
+        longTail: { themes: 1, mentions: 1, themesBySource: { reddit: 1 } },
+        excludedPositive: 3,
+      },
+    }
+
+    const markdown = renderReportMarkdown(emptyReport, input)
+
+    const gaps = section(markdown, /^## .*EMERGING GAPS/im)
+    expect(gaps).toContain('**Single mentions, not yet a pattern** (1 mentioned once):')
+    expect(gaps).not.toContain('(top')
+    expect(gaps).toContain('- **Wants a public gallery**')
+  })
+
+  it('[happy] an action citing a single-mention ref lists its name under (themes: ...)', () => {
+    const base = makeInput()
+    const input = {
+      ...base,
+      painPoints: { ...base.painPoints, singleMentions: [singleMention('pp-4', 'Awkward share flow')] },
+    }
+    const report = {
+      executiveSummary: 'Sample of 12 items.',
+      recommendedActions: [
+        {
+          action: 'Validate the share flow',
+          rationale: 'Came up once.',
+          themes: [{ bucket: 'painPoints' as const, index: 4 }],
+        },
+      ],
+    }
+
+    const markdown = renderReportMarkdown(report, input)
+
+    const recommendations = section(markdown, /^## .*RECOMMENDATIONS/im)
+    expect(recommendations).toContain('Validate the share flow')
+    expect(recommendations).toMatch(/\(themes: [^)]*Awkward share flow/)
+  })
+
+  it('[happy] the five-section render with an empty bucket still contains No recurring signal (expect: green)', () => {
+    const markdown = renderReportMarkdown(emptyReport, makeInput())
+
+    expect(markdown.match(/^## /gm)).toHaveLength(5)
+    expect(markdown).toContain('No recurring signal')
+  })
 
   it('[happy] renders five ## sections, a No recurring signal line for an empty bucket, and cited theme names', () => {
     const report = {

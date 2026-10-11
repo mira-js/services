@@ -401,8 +401,13 @@ export async function synthesizeStructuredReport(
   }
 }
 
-function bucketCounts(bucket: SynthesisBucket): { kept: number; longTail: number; excludedPositive: number } {
-  return { kept: bucket.themes.length, longTail: bucket.longTail.themes, excludedPositive: bucket.excludedPositive }
+function bucketCounts(bucket: SynthesisBucket): { kept: number; singleMentions: number; longTail: number; excludedPositive: number } {
+  return {
+    kept: bucket.themes.length,
+    singleMentions: bucket.singleMentions?.length ?? 0,
+    longTail: bucket.longTail.themes,
+    excludedPositive: bucket.excludedPositive,
+  }
 }
 
 function finishSynthesis(value: string): Result<string> {

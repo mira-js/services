@@ -160,7 +160,101 @@ describe('selectSynthesisInput', () => {
     expect(json).not.toContain('https://')
   })
 
+  it('[unhappy] positive frequency-1 themes are counted in excludedPositive and never appear in singleMentions', () => {
+    const input = selectSynthesisInput({
+      ...emptyBuckets(),
+      painPoints: [
+        theme({ theme: 'Loved sharing', frequency: 1, sentiment: 0.4 }),
+        theme({ theme: 'Clumsy export', frequency: 1, sentiment: -0.5 }),
+        theme({ theme: 'Loved gallery', frequency: 1, sentiment: 0.15 }),
+      ],
+    })
+
+    expect(input.painPoints.excludedPositive).toBe(2)
+    expect(input.painPoints.themes).toEqual([])
+    expect(input.painPoints.singleMentions?.map((t) => t.name)).toEqual(['Clumsy export'])
+    expect(input.painPoints.singleMentions?.map((t) => t.id)).toEqual(['pp-1'])
+  })
+
+  it('[unhappy] 8 negative singletons with kept 0 yield at most 5 singleMentions, most negative first, ties by lower index; longTail count unchanged', () => {
+    const sentiments = [-0.2, -0.9, -0.5, -0.9, -0.1, -0.5, -0.7, 0.1]
+    const input = selectSynthesisInput({
+      ...emptyBuckets(),
+      painPoints: sentiments.map((sentiment, i) => theme({ theme: `Single ${i}`, frequency: 1, sentiment })),
+    })
+
+    const mentions = input.painPoints.singleMentions ?? []
+    expect(mentions).toHaveLength(5)
+    // Ascending sentiment; -0.9 (idx 1, 3), -0.7 (6), -0.5 (idx 2, 5).
+    expect(mentions.map((t) => t.id)).toEqual(['pp-1', 'pp-3', 'pp-6', 'pp-2', 'pp-5'])
+    expect(input.painPoints.themes).toEqual([])
+    expect(input.painPoints.longTail.themes).toBe(8)
+    expect(input.painPoints.longTail.mentions).toBe(8)
+  })
+
+  it('[unhappy] a bucket with 1 recurring theme plus 4 singletons has no singleMentions key (expect: green)', () => {
+    const input = selectSynthesisInput({
+      ...emptyBuckets(),
+      painPoints: [
+        theme({ theme: 'Recurring', frequency: 3 }),
+        ...[1, 2, 3, 4].map((i) => theme({ theme: `Single ${i}`, frequency: 1 })),
+      ],
+    })
+
+    expect(input.painPoints.themes.map((t) => t.name)).toEqual(['Recurring'])
+    expect(input.painPoints.longTail.themes).toBe(4)
+    expect('singleMentions' in input.painPoints).toBe(false)
+    expect(Object.keys(input.painPoints).sort()).toEqual(['excludedPositive', 'longTail', 'themes'])
+  })
+
+  it('[unhappy] an empty bucket, or one holding only positive themes, has no singleMentions key (expect: green)', () => {
+    const input = selectSynthesisInput({
+      ...emptyBuckets(),
+      competitorWeaknesses: [
+        theme({ theme: 'Loved one', frequency: 1, sentiment: 0.6 }),
+        theme({ theme: 'Loved two', frequency: 3, sentiment: 0.9 }),
+      ],
+    })
+
+    expect('singleMentions' in input.painPoints).toBe(false)
+    expect('singleMentions' in input.competitorWeaknesses).toBe(false)
+    expect(input.competitorWeaknesses.excludedPositive).toBe(2)
+    expect('singleMentions' in input.emergingGaps).toBe(false)
+  })
+
   // ─── happy ──────────────────────────────────────────────────────────────────
+
+  it('[happy] singleMentions entries carry the original-index id, name, frequency 1, rounded sentiment, sources and quotes', () => {
+    const input = selectSynthesisInput({
+      ...emptyBuckets(),
+      emergingGaps: [
+        theme({ theme: 'Positive skipped', frequency: 1, sentiment: 0.8 }),
+        theme({
+          theme: 'Cannot share designs',
+          frequency: 1,
+          sentiment: -0.4567,
+          sources: ['reddit'],
+          evidence: [
+            { source: 'reddit', url: 'https://example.com/one', excerpt: 'no way to share' },
+            { source: 'reddit', url: 'https://example.com/two', excerpt: 'second quote' },
+            { source: 'reddit', url: 'https://example.com/three', excerpt: 'third quote' },
+          ],
+        }),
+      ],
+    })
+
+    expect(input.emergingGaps.singleMentions).toEqual([
+      {
+        id: 'eg-1',
+        name: 'Cannot share designs',
+        frequency: 1,
+        sentiment: -0.46,
+        sources: ['reddit'],
+        quotes: ['no way to share', 'second quote'],
+      },
+    ])
+    expect(JSON.stringify(input)).not.toContain('https://')
+  })
 
   it('[happy] does not mutate or reorder the caller arrays and passes a given sample through with basis items (expect: green)', () => {
     const buckets = {

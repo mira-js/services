@@ -74,12 +74,13 @@ function refKey(ref: ThemeRef): string {
 }
 
 function inputThemesByKey(input: SynthesisInput): Map<string, SynthesisTheme> {
-  const entries = [...input.painPoints.themes, ...input.competitorWeaknesses.themes, ...input.emergingGaps.themes].flatMap(
-    (theme): [string, SynthesisTheme][] => {
+  const buckets = [input.painPoints, input.competitorWeaknesses, input.emergingGaps]
+  const entries = buckets
+    .flatMap((bucket) => [...bucket.themes, ...(bucket.singleMentions ?? [])])
+    .flatMap((theme): [string, SynthesisTheme][] => {
       const ref = themeRefFromId(theme.id)
       return ref ? [[refKey(ref), theme]] : []
-    },
-  )
+    })
   return new Map(entries)
 }
 
@@ -149,11 +150,20 @@ function renderTheme(theme: SynthesisTheme): string {
   return `- **${theme.name}** — ${mentions}${sources}${quote}`
 }
 
+function renderEmptyBucket(bucket: SynthesisBucket): string {
+  const mentionedOnce = bucket.longTail.themes
+  const singles = bucket.singleMentions ?? []
+  if (singles.length > 0) {
+    const count = singles.length === mentionedOnce ? `${mentionedOnce}` : `top ${singles.length} of ${mentionedOnce}`
+    return `**Single mentions, not yet a pattern** (${count} mentioned once):\n\n${singles.map(renderTheme).join('\n')}`
+  }
+  return mentionedOnce > 0
+    ? `No recurring signal (${mentionedOnce} ${mentionedOnce === 1 ? 'topic' : 'topics'} mentioned once).`
+    : 'No recurring signal.'
+}
+
 function renderBucket(heading: string, bucket: SynthesisBucket): string {
-  const body =
-    bucket.themes.length > 0
-      ? bucket.themes.map(renderTheme).join('\n')
-      : `No recurring signal (${bucket.longTail.themes} long-tail ${bucket.longTail.themes === 1 ? 'theme' : 'themes'}).`
+  const body = bucket.themes.length > 0 ? bucket.themes.map(renderTheme).join('\n') : renderEmptyBucket(bucket)
   return `## ${heading}\n\n${body}`
 }
 
