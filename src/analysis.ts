@@ -16,6 +16,15 @@ import { debugRawEnabled } from './debug.js'
 import { loadPrompt, fillTemplate } from './prompt-files.js'
 import { getEmbeddings } from './embeddings.js'
 import { labelClusters } from './theme-labels.js'
+import {
+  THEME_CLUSTER_THRESHOLD,
+  THEME_EMBED_TEXT,
+  THEME_MERGE_THRESHOLD,
+  THEME_SEED_ORDER,
+  clusterIndices,
+  clusterStats,
+  themeEmbeddingText,
+} from './clustering.js'
 import type { ThemeCacheOptions } from './theme-labels.js'
 import type { LLMUsageSink } from './llm-usage.js'
 
@@ -59,45 +68,6 @@ if (debugRawEnabled()) {
     module: 'mira-core/packages/core-services/analysis.ts',
     resolvedFrom: 'dist',
   })
-}
-
-// ─── Clustering helpers ───────────────────────────────────────────────────────
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  const dot = a.reduce((sum, val, i) => sum + val * b[i], 0)
-  const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0))
-  const magB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0))
-  if (magA === 0 || magB === 0) return 0
-  return dot / (magA * magB)
-}
-
-type ClusterState<T> = { clusters: T[][]; assignedIndices: ReadonlySet<number> }
-
-function greedyCluster<T>(items: T[], embeddings: number[][], threshold: number): T[][] {
-  const { clusters } = items.reduce<ClusterState<T>>(
-    ({ clusters, assignedIndices }, item, i) => {
-      if (assignedIndices.has(i)) return { clusters, assignedIndices }
-
-      const { members, newAssigned } = items.reduce<{ members: T[]; newAssigned: Set<number> }>(
-        (acc, candidate, j) => {
-          if (j === i || acc.newAssigned.has(j) || assignedIndices.has(j)) return acc
-          if (cosineSimilarity(embeddings[i], embeddings[j]) >= threshold) {
-            return { members: [...acc.members, candidate], newAssigned: new Set([...acc.newAssigned, j]) }
-          }
-          return acc
-        },
-        { members: [item], newAssigned: new Set([i]) },
-      )
-
-      return {
-        clusters: [...clusters, members],
-        assignedIndices: new Set([...assignedIndices, ...newAssigned]),
-      }
-    },
-    { clusters: [], assignedIndices: new Set() },
-  )
-
-  return clusters
 }
 
 // ─── Exported functions ───────────────────────────────────────────────────────
@@ -194,6 +164,31 @@ function clusterByStringDedup(pairs: ExtractionPair[]): ExtractionPair[][] {
 
 export { type ThemeCacheOptions } from './theme-labels.js'
 
+async function clusterByEmbedding(pairs: ExtractionPair[], cache?: ThemeCacheOptions): Promise<ExtractionPair[][]> {
+  const texts = pairs.map((p) => themeEmbeddingText(p.extraction, THEME_EMBED_TEXT))
+  const vectors = await getEmbeddings(texts, cache)
+  // clusterIndices walks the vectors, so a short reply would silently drop trailing pairs.
+  if (vectors.length !== pairs.length) {
+    throw new Error(`Jina embeddings returned ${vectors.length} vectors for ${pairs.length} inputs`)
+  }
+  const clusters = clusterIndices(vectors, {
+    threshold: THEME_CLUSTER_THRESHOLD,
+    mergeThreshold: THEME_MERGE_THRESHOLD,
+    seedOrder: THEME_SEED_ORDER,
+    keys: pairs.map((p, i) => p.item.url + '\n' + texts[i]),
+  }).map((indices) => indices.map((i) => pairs[i]))
+
+  logger.info('theme_clustering', {
+    event: 'theme_clustering',
+    ...clusterStats(clusters),
+    threshold: THEME_CLUSTER_THRESHOLD,
+    mergeThreshold: THEME_MERGE_THRESHOLD,
+    seedOrder: THEME_SEED_ORDER,
+    embedText: THEME_EMBED_TEXT,
+  })
+  return clusters
+}
+
 export async function aggregateThemes(
   pairs: ExtractionPair[],
   options?: { skipEmbeddings?: boolean; onUsage?: LLMUsageSink; cache?: ThemeCacheOptions },
@@ -203,14 +198,7 @@ export async function aggregateThemes(
 
     const clusters = options?.skipEmbeddings
       ? clusterByStringDedup(pairs)
-      : greedyCluster(
-          pairs,
-          await getEmbeddings(
-            pairs.map((p) => p.extraction.pain_points.join(' ') + ' ' + p.extraction.key_quote),
-            options?.cache,
-          ),
-          0.75,
-        )
+      : await clusterByEmbedding(pairs, options?.cache)
 
     const labels = await labelClusters(clusters, {
       ...(options?.onUsage ? { onUsage: options.onUsage } : {}),
