@@ -24,6 +24,8 @@ import type { LLMUsageSink } from './llm-usage.js'
 export const ExtractionResultSchema = z.object({
   pain_points: z.array(z.string()),
   sentiment: z.number().min(-1).max(1),
+  // Pain-only score (item 197); optional so cached rows and prompts without it still parse.
+  pain_sentiment: z.number().min(-1).max(1).nullable().optional(),
   category: z.enum(['complaint', 'feature-request', 'workflow-friction', 'pricing', 'switching-signal', 'integration-issue', 'comparison', 'workaround', 'information-seeking']),
   mentioned_tools: z.array(z.string()),
   key_quote: z.string(),
@@ -216,9 +218,14 @@ export async function aggregateThemes(
     })
 
     const built = clusters.map((cluster, i): PainPointTheme => {
+      // Theme sentiment is pain-level: an item that praises the product overall
+      // but lists a con contributes the con's score, not the praise (item 197).
       const avgSentiment =
-        cluster.reduce((sum, p) => sum + Math.max(-1, Math.min(1, p.extraction.sentiment)), 0) /
-        cluster.length
+        cluster.reduce(
+          (sum, p) =>
+            sum + Math.max(-1, Math.min(1, p.extraction.pain_sentiment ?? p.extraction.sentiment)),
+          0,
+        ) / cluster.length
 
       const synthesized_name = labels[i]
 

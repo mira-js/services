@@ -22,6 +22,10 @@ import { resolveLLMConfig } from './llm-config.js'
  * `AnalysisCacheKeyInput.responseFormat`, so enabling JSON mode re-keys only the
  * calls that use it. Hardening `stripFences` so it rescues replies that used to
  * fail to parse needs no bump either, because failed replies are never cached.
+ * Adding an optional, backward-compatible schema field is not a bump either
+ * (`pain_sentiment`, item 197): every stored value still parses unchanged, and
+ * the prompt edit that asks for the field re-keys the extract rows through the
+ * template hash (`computeAnalysisPromptVersion`).
  */
 export const CACHE_KEY_VERSION = 'v1'
 
