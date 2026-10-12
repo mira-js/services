@@ -38,6 +38,8 @@ export const ExtractionResultSchema = z.object({
   category: z.enum(['complaint', 'feature-request', 'workflow-friction', 'pricing', 'switching-signal', 'integration-issue', 'comparison', 'workaround', 'information-seeking']),
   mentioned_tools: z.array(z.string()),
   key_quote: z.string(),
+  // Item 199; optional so cached rows and replies without it still parse.
+  subject_relation: z.enum(['subject', 'competitor', 'unrelated']).nullable().optional(),
 })
 
 const BatchExtractionResultSchema = z.array(ExtractionResultSchema)
@@ -72,8 +74,14 @@ if (debugRawEnabled()) {
 
 // ─── Exported functions ───────────────────────────────────────────────────────
 
+export interface ExtractBatchOptions {
+  /** Product names the run is about. Sent as a separate user message, never filled into the template. */
+  subjectProducts?: readonly string[]
+}
+
 export async function extractBatch(
   items: CollectedItem[],
+  options: ExtractBatchOptions = {},
 ): Promise<Result<ExtractionResult, BatchError>[]> {
   if (!items.length) return []
 
@@ -88,7 +96,15 @@ export async function extractBatch(
     }))
     const template = loadExtractionTemplate()
     const prompt = fillTemplate(template, { items: JSON.stringify(itemsJson, null, 2) })
-    const raw = await callLLM([{ role: 'user', content: prompt }], {
+    const subjectProducts = options.subjectProducts ?? []
+    // With no subject the call stays byte-identical to the single-message form.
+    const messages: LLMMessage[] = subjectProducts.length
+      ? [
+        { role: 'user', content: prompt },
+        { role: 'user', content: JSON.stringify({ subject_products: subjectProducts }) },
+      ]
+      : [{ role: 'user', content: prompt }]
+    const raw = await callLLM(messages, {
       maxTokens: 1024 * items.length,
       temperature: 0,
     })
